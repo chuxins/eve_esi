@@ -204,8 +204,11 @@ class ESIClient:
         return self._get(f"/v3/characters/{character_id}/wallet/transactions/")
 
     def get_universe_type(self, type_id):
-        """获取 EVE 物品类型信息（用于 type_id -> 名称翻译）。"""
-        return self._get(f"/v3/universe/types/{int(type_id)}/")
+        """获取 EVE 物品类型信息（用于 type_id -> 中文名称翻译）。"""
+        return self._get(
+            f"/v3/universe/types/{int(type_id)}/",
+            params={"language": "zh"},
+        )
 
     # ------------------------------------------------------------ 汇总统计
 
