@@ -5,6 +5,8 @@
 - oauth_tokens   OAuth token（每角色一条）
 - wallet_journal 钱包变动流水（按 ref_id 去重）
 - wallet_balance 钱包余额历史快照
+- wallet_transactions 市场交易详情（按 transaction_id 去重）
+- item_types       EVE 物品类型表（type_id -> 名称）
 
 数据库连接配置来自 config.json 的 "db" 字段。
 """
@@ -248,6 +250,143 @@ class Database:
                 else:
                     cur.execute("SELECT COUNT(*) AS n FROM wallet_journal")
                 return cur.fetchone()["n"]
+
+    # ------------------------------------------------------------ wallet transactions
+
+    def upsert_wallet_transactions(self, character_id, entries):
+        """批量写入市场交易详情，按 (character_id, transaction_id) 幂等去重。"""
+        if not entries:
+            return 0
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                for e in entries:
+                    unit_price = float(e.get("unit_price") or 0)
+                    quantity = int(e.get("quantity") or 0)
+                    total_price = unit_price * quantity
+                    cur.execute(
+                        """INSERT INTO wallet_transactions
+                           (character_id, transaction_id, journal_ref_id, type_id, location_id,
+                            client_id, date, is_buy, is_personal, quantity, unit_price, total_price)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                           ON DUPLICATE KEY UPDATE
+                           journal_ref_id = VALUES(journal_ref_id),
+                           type_id = VALUES(type_id),
+                           location_id = VALUES(location_id),
+                           client_id = VALUES(client_id),
+                           date = VALUES(date),
+                           is_buy = VALUES(is_buy),
+                           is_personal = VALUES(is_personal),
+                           quantity = VALUES(quantity),
+                           unit_price = VALUES(unit_price),
+                           total_price = VALUES(total_price)""",
+                        (
+                            character_id,
+                            int(e.get("transaction_id")),
+                            e.get("journal_ref_id"),
+                            e.get("type_id"),
+                            e.get("location_id"),
+                            e.get("client_id"),
+                            _to_mysql_datetime(e.get("date")),
+                            int(bool(e.get("is_buy"))),
+                            int(bool(e.get("is_personal"))),
+                            quantity,
+                            unit_price,
+                            total_price,
+                        ),
+                    )
+                return len(entries)
+
+    def get_wallet_transactions(self, character_id, limit=50):
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT t.*, i.name AS type_name
+                       FROM wallet_transactions t
+                       LEFT JOIN item_types i ON i.type_id = t.type_id
+                       WHERE t.character_id=%s
+                       ORDER BY t.date DESC, t.transaction_id DESC
+                       LIMIT %s""",
+                    (character_id, int(limit)),
+                )
+                return cur.fetchall()
+
+    def get_wallet_transactions_by_journal_refs(self, character_id, journal_ref_ids):
+        """按 journal_ref_id 查询市场交易详情，返回列表。"""
+        if not journal_ref_ids:
+            return []
+        refs = [int(x) for x in journal_ref_ids if x]
+        if not refs:
+            return []
+        placeholders = ",".join(["%s"] * len(refs))
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""SELECT t.*, i.name AS type_name
+                        FROM wallet_transactions t
+                        LEFT JOIN item_types i ON i.type_id = t.type_id
+                        WHERE t.character_id=%s AND t.journal_ref_id IN ({placeholders})
+                        ORDER BY t.date ASC, t.transaction_id ASC""",
+                    (character_id, *refs),
+                )
+                return cur.fetchall()
+
+    def wallet_transactions_count(self, character_id=None):
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                if character_id:
+                    cur.execute(
+                        "SELECT COUNT(*) AS n FROM wallet_transactions WHERE character_id=%s",
+                        (character_id,),
+                    )
+                else:
+                    cur.execute("SELECT COUNT(*) AS n FROM wallet_transactions")
+                return cur.fetchone()["n"]
+
+    # ------------------------------------------------------------ item types
+
+    def upsert_item_types(self, entries):
+        """批量写入 EVE 物品类型名称。"""
+        if not entries:
+            return 0
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                for e in entries:
+                    cur.execute(
+                        """INSERT INTO item_types (type_id, name)
+                           VALUES (%s, %s)
+                           ON DUPLICATE KEY UPDATE name = VALUES(name)""",
+                        (int(e["type_id"]), str(e.get("name") or "")[:255]),
+                    )
+                return len(entries)
+
+    def get_missing_item_type_ids(self, type_ids):
+        """返回 item_types 表中不存在的 type_id 列表。"""
+        ids = [int(x) for x in type_ids if x]
+        if not ids:
+            return []
+        placeholders = ",".join(["%s"] * len(ids))
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT type_id FROM item_types WHERE type_id IN ({placeholders})",
+                    ids,
+                )
+                existing = {int(r["type_id"]) for r in cur.fetchall()}
+        return [tid for tid in ids if tid not in existing]
+
+    def get_item_type_names(self, type_ids):
+        """返回 {type_id: name} 字典。"""
+        ids = [int(x) for x in type_ids if x]
+        if not ids:
+            return {}
+        placeholders = ",".join(["%s"] * len(ids))
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT type_id, name FROM item_types WHERE type_id IN ({placeholders})",
+                    ids,
+                )
+                return {int(r["type_id"]): r["name"] for r in cur.fetchall()}
 
     # ------------------------------------------------------------ balance 快照
 

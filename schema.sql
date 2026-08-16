@@ -56,3 +56,33 @@ CREATE TABLE IF NOT EXISTS wallet_balance (
     CONSTRAINT fk_balance_char FOREIGN KEY (character_id)
         REFERENCES characters(character_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- EVE 物品类型表（type_id -> 名称，用于交易详情翻译）
+CREATE TABLE IF NOT EXISTS item_types (
+    type_id BIGINT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 市场交易详情表（按角色 + transaction_id 去重）
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    character_id BIGINT NOT NULL,
+    transaction_id BIGINT NOT NULL COMMENT 'ESI wallet transaction id',
+    journal_ref_id BIGINT NULL,
+    type_id BIGINT NULL,
+    location_id BIGINT NULL,
+    client_id BIGINT NULL,
+    date DATETIME NULL,
+    is_buy TINYINT(1) NULL,
+    is_personal TINYINT(1) NULL,
+    quantity BIGINT NULL,
+    unit_price DECIMAL(20,2) NULL,
+    total_price DECIMAL(20,2) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_char_txn (character_id, transaction_id),
+    KEY idx_char_date (character_id, date),
+    KEY idx_char_journal_ref (character_id, journal_ref_id),
+    CONSTRAINT fk_txn_char FOREIGN KEY (character_id)
+        REFERENCES characters(character_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

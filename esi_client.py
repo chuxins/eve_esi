@@ -193,6 +193,20 @@ class ESIClient:
             page += 1
         return all_entries
 
+    # ------------------------------------------------------------ 市场交易
+
+    def get_wallet_transactions(self, character_id):
+        """获取角色的全部市场交易详情（wallet transactions）。
+
+        返回条目列表，每条包含：transaction_id、journal_ref_id、type_id、
+        location_id、client_id、date、is_buy、is_personal、quantity、unit_price。
+        """
+        return self._get(f"/v3/characters/{character_id}/wallet/transactions/")
+
+    def get_universe_type(self, type_id):
+        """获取 EVE 物品类型信息（用于 type_id -> 名称翻译）。"""
+        return self._get(f"/v3/universe/types/{int(type_id)}/")
+
     # ------------------------------------------------------------ 汇总统计
 
     @staticmethod

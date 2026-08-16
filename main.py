@@ -8,6 +8,7 @@
     python main.py --char chuxins1        # 查询指定角色
     python main.py --balance --char 123   # 仅查询余额
     python main.py --journal 100          # 查询最近 100 条变动流水
+    python main.py --market-transactions  # 同步并查看市场交易详情
     python main.py --remove chuxins1      # 删除角色及其数据
     python main.py --reset-token chuxins1 # 清除指定角色 token 并重新授权
     python main.py --migrate              # 从旧版 token.json 迁移单角色
@@ -176,6 +177,35 @@ def show_journal(db, character, access_token, config, limit):
     print("-" * 60)
 
 
+def show_market_transactions(db, character, access_token, config, limit=20):
+    """从 ESI 同步并展示市场交易详情。"""
+    from market import sync_market_transactions
+
+    client = ESIClient(access_token, config["user_agent"])
+    entries = sync_market_transactions(db, client, character["character_id"])
+    print(f"已同步 {len(entries)} 条市场交易记录")
+
+    rows = db.get_wallet_transactions(character["character_id"], limit=limit)
+    if not rows:
+        print("暂无市场交易记录。")
+        return
+
+    print(f"最近 {len(rows)} 条市场交易详情（已持久化到 MySQL）：")
+    print(f"{'时间':<20}{'方向':<6}{'物品':<40}{'数量':>8}{'单价(ISK)':>16}{'总额(ISK)':>18}")
+    print("-" * 110)
+    for r in rows:
+        date = str(r.get("date") or "")[:19]
+        action = "买入" if r.get("is_buy") else "卖出"
+        name = r.get("type_name") or (
+            f"物品#{r.get('type_id')}" if r.get("type_id") else "未知物品"
+        )
+        qty = int(r.get("quantity") or 0)
+        unit = float(r.get("unit_price") or 0)
+        total = float(r.get("total_price") or unit * qty)
+        print(f"{date:<20}{action:<6}{name:<40}{qty:>8}{unit:>16,.2f}{total:>18,.2f}")
+    print("-" * 110)
+
+
 def migrate_legacy_token(config, db):
     """将旧版 token.json 中的单角色数据迁移到数据库。"""
     if not os.path.exists(TOKEN_FILE_PATH):
@@ -205,6 +235,7 @@ def main():
     parser.add_argument("--migrate", action="store_true", help="从旧版 token.json 迁移单角色")
     parser.add_argument("--balance", action="store_true", help="仅查询余额")
     parser.add_argument("--journal", type=int, metavar="N", help="查询最近 N 条变动流水")
+    parser.add_argument("--market-transactions", action="store_true", help="同步并查看市场交易详情")
     args = parser.parse_args()
 
     config = load_config()
@@ -250,6 +281,18 @@ def main():
         migrate_legacy_token(config, db)
         return
 
+    if args.market_transactions:
+        targets = resolve_characters(db, args.char)
+        for c in targets:
+            print("=" * 60)
+            print(f"角色：{c['character_name']} (ID: {c['character_id']})")
+            access_token = get_access_token(config, db, c["character_id"])
+            if not access_token:
+                print("  该角色无有效 token，请重新授权：python main.py --add-account")
+                continue
+            show_market_transactions(db, c, access_token, config)
+        return
+
     # 正常查询流程
     targets = resolve_characters(db, args.char)
     do_balance = args.balance or (not args.journal)
@@ -276,16 +319,5 @@ if __name__ == "__main__":
         print(f"[错误] {exc}", file=sys.stderr)
         sys.exit(1)
     except Exception as exc:  # 网络、数据库等其它错误
-        print(f"[错误] {exc}", file=sys.stderr)
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except OAuthError as exc:
-        print(f"[错误] {exc}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as exc:  # 网络等其它错误
         print(f"[错误] {exc}", file=sys.stderr)
         sys.exit(1)

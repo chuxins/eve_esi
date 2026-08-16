@@ -96,8 +96,11 @@ def get_latest_from_db(db):
     return entry, balance, c
 
 
-def format_message(entry, balance, character):
-    """将流水格式化为中文推送消息。"""
+def format_message(entry, balance, character, db=None):
+    """将流水格式化为中文推送消息。
+
+    当 db 可用且流水为“市场托管释放”时，将说明替换为市场交易详情。
+    """
     amount = float(entry.get("amount", 0) or 0)
     desc_cn = translate_description(entry.get("description"))
     date_raw = entry.get("date") or ""
@@ -115,10 +118,33 @@ def format_message(entry, balance, character):
     ]
     if balance is not None:
         lines.append(f"🏦 当前余额：{float(balance):,.2f} ISK")
-    lines.append(f"📝 说明：{desc_cn}")
+
+    market_lines = []
+    if db is not None and desc_cn == "市场托管释放":
+        journal_ref_id = entry.get("id") or entry.get("ref_id")
+        txns = db.get_wallet_transactions_by_journal_refs(
+            character["character_id"], [journal_ref_id]
+        )
+        for txn in txns:
+            name = txn.get("type_name") or (
+                f"物品#{txn.get('type_id')}" if txn.get("type_id") else "未知物品"
+            )
+            action = "买入" if txn.get("is_buy") else "卖出"
+            qty = int(txn.get("quantity") or 0)
+            unit = float(txn.get("unit_price") or 0)
+            total = float(txn.get("total_price") or unit * qty)
+            market_lines.append(
+                f"📦 {name} {action} x{qty} 单价 {unit:,.2f} ISK，总额 {total:+,.2f} ISK"
+            )
+
+    if market_lines:
+        lines.extend(market_lines)
+    else:
+        lines.append(f"📝 说明：{desc_cn}")
+
     lines.append(f"🕐 时间：{date_cn}（北京时间）")
     lines.append(f"👤 角色：{character['character_name']}")
-    lines.append(f"🆔 流水ID：{entry.get('id')}")
+    lines.append(f"🆔 流水ID：{entry.get('id') or entry.get('ref_id')}")
     return "\n".join(lines)
 
 
@@ -149,7 +175,7 @@ def main():
         print("未能获取到最新流水。")
         sys.exit(1)
 
-    message = format_message(entry, balance, character)
+    message = format_message(entry, balance, character, db)
     print("=== 推送内容 ===")
     print(message)
 

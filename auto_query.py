@@ -43,9 +43,13 @@ def now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _build_batch_message(entries, cname):
-    """构建单批推送消息（含收入/支出头部摘要）。"""
+def _build_batch_message(entries, cname, db=None):
+    """构建单批推送消息（含收入/支出头部摘要）。
+
+    当 db 可用时，会把“市场托管释放”替换为关联的市场交易详情。
+    """
     from esi_client import translate_description
+
     lines = []
     income = 0.0
     expense = 0.0
@@ -53,11 +57,35 @@ def _build_batch_message(entries, cname):
         d = str(e.get("journal_date"))[:16]
         amount = float(e.get("amount") or 0)
         desc = translate_description(e.get("description"))
-        lines.append(f"{d}  {amount:+,.0f}  {desc}")
+        cid = e.get("character_id")
+        ref_id = e.get("ref_id")
+
+        market_lines = []
+        if db is not None and cid and ref_id and desc == "市场托管释放":
+            txns = db.get_wallet_transactions_by_journal_refs(cid, [ref_id])
+            for txn in txns:
+                name = txn.get("type_name") or (
+                    f"物品#{txn.get('type_id')}" if txn.get("type_id") else "未知物品"
+                )
+                action = "买入" if txn.get("is_buy") else "卖出"
+                qty = int(txn.get("quantity") or 0)
+                unit = float(txn.get("unit_price") or 0)
+                total = float(txn.get("total_price") or unit * qty)
+                market_lines.append(
+                    f"{d}  {amount:+,.0f}  📦 {name} {action} x{qty} "
+                    f"单价 {unit:,.2f} 总额 {total:+,.2f}"
+                )
+
+        if market_lines:
+            lines.extend(market_lines)
+        else:
+            lines.append(f"{d}  {amount:+,.0f}  {desc}")
+
         if amount >= 0:
             income += amount
         else:
             expense += amount
+
     header = (
         f"📬 {cname} 新流水（{len(entries)} 条）\n"
         f"📥 收入 {income:+,.0f} ｜ 📤 支出 {expense:+,.0f}\n"
@@ -139,7 +167,7 @@ def push_new_flow(config, db):
         delivered_last = last_id  # 仅推进真正送达的流水 ID
         for i in range(0, len(pending), batch_size):
             batch = pending[i:i + batch_size]
-            msg = _build_batch_message(batch, cname)
+            msg = _build_batch_message(batch, cname, db)
             if report_url and i + batch_size >= len(pending):
                 msg = msg + f"\n📊 图表：{report_url}"
             try:
@@ -226,6 +254,16 @@ def query_once(config, db):
             )
         except Exception as exc:  # 单角色失败不影响其它角色
             print(f"[{now_str()}] 查询 {c['character_name']} 失败: {exc}")
+
+        # 市场交易详情（单独容错，不因交易接口失败影响余额/流水）
+        try:
+            from market import sync_market_transactions
+            tx_entries = sync_market_transactions(db, client, cid)
+            print(
+                f"[{now_str()}] {c['character_name']} 市场交易：本次同步 {len(tx_entries)} 条"
+            )
+        except Exception as exc:
+            print(f"[{now_str()}] {c['character_name']} 市场交易同步失败: {exc}")
 
 
 def main():

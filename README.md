@@ -65,9 +65,10 @@ python main.py
 python main.py --char chuxins1
 python main.py --char 2124544250 --balance
 
-# 仅查询余额 / 查询最近 100 条流水
+# 仅查询余额 / 查询最近 100 条流水 / 同步并查看市场交易详情
 python main.py --balance
 python main.py --journal 100
+python main.py --market-transactions
 
 # 删除角色及其数据 / 清除角色 token 重新授权
 python main.py --remove chuxins1
@@ -79,7 +80,7 @@ python main.py --migrate
 
 ## 定时自动查询（每 2 分钟）
 
-自动采集所有角色的钱包余额与流水并写入数据库，同时**自动重新生成 HTML 报告**（日志写入 `auto_query.log`）：
+自动采集所有角色的钱包余额、流水和市场交易详情并写入数据库，同时**自动重新生成 HTML 报告**（日志写入 `auto_query.log`）：
 
 ```bash
 # 后台启动（推荐，每 2 分钟一次）
@@ -128,7 +129,7 @@ cd eve_esi && nohup python3 -m http.server 8081 --bind 0.0.0.0 > /tmp/http_repor
 
 前置：NapCat 已运行且 OneBot HTTP 服务器开启（本项目配置为 `127.0.0.1:3000`）。
 
-**自动推送（已集成到定时任务）**：`auto_query.py` 每次同步后自动检测新流水并推送到配置的目标（通过 `push_state.json` 记录最后推送的流水 ID，避免重复推送）。
+**自动推送（已集成到定时任务）**：`auto_query.py` 每次同步后自动检测新流水并推送到配置的目标（通过 `push_state.json` 记录最后推送的流水 ID，避免重复推送）。其中“市场托管释放”流水会替换为关联的市场交易详情（物品名、买卖方向、数量、单价、总额）。
 
 ```bash
 # 手动推送
@@ -206,6 +207,8 @@ pkill -f qq_bot.py                            # 停止
 | `oauth_tokens` | 每个角色的 OAuth token（access / refresh）|
 | `wallet_journal` | 钱包变动流水（按角色 + ref_id 去重）|
 | `wallet_balance` | 钱包余额历史快照 |
+| `wallet_transactions` | 市场交易详情（按角色 + transaction_id 去重）|
+| `item_types` | EVE 物品类型表（type_id -> 名称，用于交易详情翻译）|
 
 ## 输出示例
 
