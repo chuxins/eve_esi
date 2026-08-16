@@ -1,0 +1,17 @@
+{
+  "client_id": "在此填写 Client ID",
+  "client_secret": "在此填写 Secret Key",
+  "callback_url": "http://YOUR_HOST:8000/callback/",
+  "scopes": [
+    "esi-wallet.read_character_wallet.v1"
+  ],
+  "user_agent": "eve-wallet-tracker/1.0 (your-contact@example.com)",
+  "journal_limit": 50,
+  "db": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "eve_esi",
+    "password": "在此填写数据库密码",
+    "database": "eve_esi"
+  }
+}

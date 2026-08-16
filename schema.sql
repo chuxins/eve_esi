@@ -1,0 +1,58 @@
+-- EVE ESI 持久化数据库表结构
+-- 用法: mysql -u eve_esi -p eve_esi < schema.sql
+-- 或通过程序自动初始化 (main.py --init-db)
+
+-- 角色表
+CREATE TABLE IF NOT EXISTS characters (
+    character_id BIGINT PRIMARY KEY,
+    character_name VARCHAR(64) NOT NULL,
+    scopes TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- OAuth token 表（每个角色一条，支持多角色）
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    character_id BIGINT PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT,
+    token_type VARCHAR(16),
+    expires_at BIGINT NOT NULL COMMENT 'epoch 秒',
+    scope TEXT,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_tokens_char FOREIGN KEY (character_id)
+        REFERENCES characters(character_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 钱包变动流水表（持久化历史记录）
+CREATE TABLE IF NOT EXISTS wallet_journal (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    character_id BIGINT NOT NULL,
+    ref_id BIGINT NOT NULL COMMENT 'ESI journal ref_id',
+    journal_date DATETIME NULL,
+    amount DECIMAL(20,2) NULL,
+    balance DECIMAL(20,2) NULL,
+    description VARCHAR(512) NULL,
+    first_party_id BIGINT NULL,
+    second_party_id BIGINT NULL,
+    tax DECIMAL(20,2) NULL,
+    reason VARCHAR(512) NULL,
+    context_id BIGINT NULL,
+    context_id_type VARCHAR(64) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_char_ref (character_id, ref_id),
+    KEY idx_char_date (character_id, journal_date),
+    CONSTRAINT fk_journal_char FOREIGN KEY (character_id)
+        REFERENCES characters(character_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 钱包余额历史快照表（每次查询记录一条）
+CREATE TABLE IF NOT EXISTS wallet_balance (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    character_id BIGINT NOT NULL,
+    balance DECIMAL(20,2) NOT NULL,
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_char_time (character_id, recorded_at),
+    CONSTRAINT fk_balance_char FOREIGN KEY (character_id)
+        REFERENCES characters(character_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

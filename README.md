@@ -1,0 +1,245 @@
+# EVE 钱包查询工具（MySQL 多角色版）
+
+通过 EVE Online 官方 ESI API 获取角色的**钱包余额**和**余额变动流水**，数据持久化到 **MySQL**，支持**多角色**授权与管理。
+
+## 功能
+
+- 🔐 EVE SSO OAuth2 授权（授权码 + PKCE，token 自动刷新）
+- 👥 **多角色支持**：为多个角色授权，按角色分别存储 token
+- 🗄️ **MySQL 持久化**：角色、token、钱包流水、余额快照全部入库
+- 💰 查询角色钱包当前余额（并记录余额历史快照）
+- 📒 查询钱包变动流水（journal），包含时间 / 变动金额 / 变动后余额 / 描述
+- 📊 自动统计总收入、总支出、税费与净变动
+
+## 环境要求
+
+- Python 3.8+
+- MySQL / MariaDB 数据库
+- 一个 [EVE Developers](https://developers.eveonline.com) 应用
+  - **Client ID** 与 **Secret Key**
+  - Callback URL 注册为你的公网地址（本项目使用 `http://YOUR_HOST:8000/callback/`）
+  - 权限范围（Scopes）：`esi-wallet.read_character_wallet.v1`
+
+## 安装与配置
+
+```bash
+cd eve_esi
+pip install -r requirements.txt   # requests + pymysql
+
+# 创建数据库与用户（示例）
+mysql -e "CREATE DATABASE eve_esi CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql -e "CREATE USER 'eve_esi'@'localhost' IDENTIFIED BY '你的密码';
+          GRANT ALL ON eve_esi.* TO 'eve_esi'@'localhost';"
+
+# 复制配置模板并填写 EVE 凭证与数据库信息
+cp config.example.json config.json
+```
+
+`config.json` 需包含 `db` 字段：
+```json
+"db": {
+  "host": "127.0.0.1",
+  "port": 3306,
+  "user": "eve_esi",
+  "password": "你的密码",
+  "database": "eve_esi"
+}
+```
+
+## 使用方法
+
+```bash
+# 初始化数据库表结构（首次）
+python main.py --init-db
+
+# 新增一个角色的授权（会弹出浏览器完成 EVE 登录）
+python main.py --add-account
+
+# 列出所有已授权角色
+python main.py --list
+
+# 查询所有角色的余额与流水
+python main.py
+
+# 查询指定角色（按名称或 ID）
+python main.py --char chuxins1
+python main.py --char 2124544250 --balance
+
+# 仅查询余额 / 查询最近 100 条流水
+python main.py --balance
+python main.py --journal 100
+
+# 删除角色及其数据 / 清除角色 token 重新授权
+python main.py --remove chuxins1
+python main.py --reset-token chuxins1
+
+# 从旧版 token.json 迁移单角色（v1 → v2 升级用）
+python main.py --migrate
+```
+
+## 定时自动查询（每 2 分钟）
+
+自动采集所有角色的钱包余额与流水并写入数据库，同时**自动重新生成 HTML 报告**（日志写入 `auto_query.log`）：
+
+```bash
+# 后台启动（推荐，每 2 分钟一次）
+cd eve_esi
+nohup python3 -u auto_query.py --interval 120 > auto_query.log 2>&1 &
+
+# 查看实时日志
+tail -f auto_query.log
+
+# 停止定时任务
+pkill -f auto_query.py
+```
+
+## 图表化展示余额历史
+
+基于 `wallet_balance` 表的历史快照生成折线图（PNG）：
+
+```bash
+python plot_balance.py                          # 所有角色，最近 200 条快照
+python plot_balance.py --char chuxins1          # 指定角色
+python plot_balance.py --limit 500 -o bal.png   # 最近 500 条，自定义文件名
+```
+
+默认输出文件为 `balance_history.png`，可在服务器上查看或用 VS Code 打开。
+
+## HTML 报告
+
+生成自包含的 HTML 可视化报告（内嵌余额趋势图 + 收支汇总 + 流水明细表，流水描述已翻译为中文）：
+
+```bash
+python report.py                          # 所有角色，生成 report.html
+python report.py --char chuxins1          # 指定角色
+python report.py --limit 500              # 取更多快照
+python report.py -o my_report.html        # 自定义输出文件
+```
+
+在服务器上提供报告（可选）：
+```bash
+cd eve_esi && nohup python3 -m http.server 8081 --bind 0.0.0.0 > /tmp/http_report.log 2>&1 &
+# 浏览器访问 http://YOUR_HOST:8081/report.html
+```
+
+## 推送流水到 QQ（NapCat OneBot）
+
+通过 NapCat 的 OneBot HTTP 接口，将钱包流水推送到 QQ 私聊或群聊。
+
+前置：NapCat 已运行且 OneBot HTTP 服务器开启（本项目配置为 `127.0.0.1:3000`）。
+
+**自动推送（已集成到定时任务）**：`auto_query.py` 每次同步后自动检测新流水并推送到配置的目标（通过 `push_state.json` 记录最后推送的流水 ID，避免重复推送）。
+
+```bash
+# 手动推送
+python eve_push.py                        # 推送到 config.json 配置的目标
+python eve_push.py --user 1234567         # 私聊推送
+python eve_push.py --group 987654         # 群聊推送
+python eve_push.py --from-db              # 从数据库读取（默认从 ESI）
+python eve_push.py --dry-run              # 只预览不发送
+```
+
+推送配置（config.json 的 `push` 字段）：
+```json
+"push": { "target_user": YOUR_QQ, "target_group": null }
+```
+
+## 星座 NPC 击杀监控（UniverseSystemKillsGet）
+
+基于公开端点 `GET /v3/universe/system_kills/` 监控指定星座内所有星系的 NPC 击杀数量，   
+超过阈值时自动 QQ 推送报警（无需授权）。
+
+```bash
+# 查询星座内各星系 NPC 击杀情况
+python constellation_kills.py
+
+# 指定星座 / 阈值临时覆盖
+python constellation_kills.py --constellation YX-LYK
+python constellation_kills.py --threshold 50
+
+# 只检查是否超阈值并推送（定时任务已自动调用）
+python constellation_kills.py --check
+```
+
+配置（config.json 的 `monitor` 段，星座/阈值/时间窗口均可自定义）：
+```json
+"monitor": {
+  "enabled": true,
+  "constellation": "YX-LYK",
+  "threshold": 30,
+  "window_minutes": 60
+}
+```
+- `threshold`：报警阈值（过去时间窗口内的 NPC 击杀数超过即报警）
+- `window_minutes`：报警时间窗口（默认 60 = 过去 1 小时）
+
+实现原理：定时保存 `system_kills_snapshot` 快照，报警时计算
+「当前快照值 − 窗口起点快照值」得出窗口内新增击杀数。
+
+报警去重：`monitor_state.json` 记录各星系最近报警值，仅当窗口内击杀继续增长时再次报警。
+
+## QQ 机器人命令
+
+在 QQ 中给机器人（`BOT_QQ`）发送命令，自动回复。
+
+**支持命令：**
+```
+查询 <角色名>     查询角色 ISK 余额（如：查询 chuxins1）
+查询             列出所有可用角色
+```
+
+**运行命令服务：**
+```bash
+cd eve_esi
+nohup python3 qq_bot.py > qq_bot.log 2>&1 &   # 启动（监听 127.0.0.1:8888）
+pkill -f qq_bot.py                            # 停止
+```
+
+原理：NapCat 通过 OneBot HTTP 上报将 QQ 消息事件 POST 到 `127.0.0.1:8888/onebot/event`，
+`qq_bot.py` 解析命令并从数据库快照/ESI 查询余额，通过 OneBot API 回复。
+
+## 数据库表
+
+| 表 | 说明 |
+|----|------|
+| `characters` | 已授权角色 |
+| `oauth_tokens` | 每个角色的 OAuth token（access / refresh）|
+| `wallet_journal` | 钱包变动流水（按角色 + ref_id 去重）|
+| `wallet_balance` | 钱包余额历史快照 |
+
+## 输出示例
+
+```
+============================================================
+角色：chuxins1 (ID: 2124544250)
+当前钱包余额：1,904,579,755.75 ISK
+------------------------------------------------------------
+最近 10 条钱包变动流水（已持久化到 MySQL）：
+时间                    变动(ISK)       变动后余额(ISK)  描述
+2026-08-12 15:28:21    +53,789,000.00    1,904,579,755.76  robot xi deposited cash...
+------------------------------------------------------------
+收支汇总（基于上述记录）：
+  记录条数：10
+  总收入  ：335,572,500.00 ISK
+  总支出  ：-725,010,000.00 ISK
+  税费合计：0.00 ISK
+  净变动  ：-389,437,500.00 ISK
+------------------------------------------------------------
+```
+
+## 文件说明
+
+| 文件 | 说明 |
+|------|------|
+| `main.py` | 主入口（多角色命令行交互）|
+| `auth.py` | EVE SSO OAuth2 授权与 token 刷新（纯 OAuth 逻辑）|
+| `db.py` | MySQL 数据库访问层（角色 / token / 流水 / 余额）|
+| `esi_client.py` | ESI API 客户端（余额 / journal 查询与统计）|
+| `schema.sql` | 数据库表结构（程序启动时自动初始化）|
+| `config.example.json` | 配置模板 |
+
+## 安全提示
+
+- OAuth token（含 refresh_token）保存在数据库，请勿泄露数据库凭据。
+- EVE 官方要求设置合理的 `User-Agent`，建议带上联系方式，避免被 ESI 限流。
+- 回调服务器绑定 `0.0.0.0`，请确保 EVE 回调端口仅按需对公网开放。

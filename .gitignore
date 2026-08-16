@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+.mplcache/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 运行时数据 / 配置 / 日志
+config.json
+.report_auth
+push_state.json
+*.log
+
+# 数据库
+*.db
+*.db-shm
+*.db-wal
+
+# 生成产物
+report.html
+balance_history.png
