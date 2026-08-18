@@ -14,17 +14,20 @@
 """
 
 import json
+import os
 import threading
 import time
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from auth import OAuthError, build_authorization_url, exchange_code, verify
 from esi_client import ESIClient
-from eve_push import send_message
+from eve_push import send_image_message, send_message
 from main import get_access_token, get_db, load_config
+from plot_balance import plot_balance
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EVENT_HOST = "127.0.0.1"
 EVENT_PORT = 8888
 CALLBACK_HOST = "0.0.0.0"
@@ -90,6 +93,8 @@ def handle_event(event):
         _on_list_accounts(user_id)
     elif text == "查询" or text.startswith("查询 "):
         _on_query(user_id, text)
+    elif text == "图表" or text.startswith("图表 "):
+        _on_chart(user_id, text)
 
 
 def _on_add_account(user_id):
@@ -192,6 +197,63 @@ def _query_balance(config, db, character):
     return None, None
 
 
+def _on_chart(user_id, text):
+    """处理「图表 <角色名>」指令：生成对应角色的余额图表并推送图片。"""
+    name = text[len("图表"):].strip()
+    if not name:
+        try:
+            send_message("请使用格式：图表 <角色名>", target_user=user_id)
+        except Exception as exc:
+            print(f"[{_now()}] 发送图表格式提示失败: {exc}")
+        return
+
+    config = load_config()
+    db = get_db(config)
+    chars = db.list_characters()
+    matched = [
+        c for c in chars
+        if str(c["character_id"]) == name or c["character_name"] == name
+    ]
+    if not matched:
+        try:
+            send_message(f"未找到角色「{name}」。发送「查询」可查看已授权角色列表。", target_user=user_id)
+        except Exception as exc:
+            print(f"[{_now()}] 发送未找到角色失败: {exc}")
+        return
+
+    character = matched[0]
+    output = os.path.join(BASE_DIR, f"chart_{character['character_id']}.png")
+    try:
+        plot_balance(config, char_arg=name, limit=200, output=output)
+    except SystemExit:
+        try:
+            send_message(f"❌ 角色「{name}」暂无余额历史数据，请稍后再试。", target_user=user_id)
+        except Exception as exc:
+            print(f"[{_now()}] 发送无数据提示失败: {exc}")
+        return
+    except Exception as exc:
+        print(f"[{_now()}] 图表生成失败（{name}）: {exc}")
+        try:
+            send_message(f"❌ 图表生成失败：{exc}", target_user=user_id)
+        except Exception as send_exc:
+            print(f"[{_now()}] 发送图表失败提示失败: {send_exc}")
+        return
+
+    try:
+        send_image_message(
+            output,
+            target_user=user_id,
+            text=f"📊 {character['character_name']} 余额图表",
+        )
+        print(f"[{_now()}] 已发送 {character['character_name']} 图表给 {user_id}")
+    except Exception as exc:
+        print(f"[{_now()}] 发送图表失败（{name}）: {exc}")
+        try:
+            send_message(f"❌ 图表已生成但发送失败：{exc}", target_user=user_id)
+        except Exception as send_exc:
+            print(f"[{_now()}] 发送失败提示失败: {send_exc}")
+
+
 # ---------------------------------------------------------------- OAuth 回调
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -274,8 +336,10 @@ def main():
     callback_port = parsed.port or 8000
     callback_path = parsed.path or "/"
 
-    event_server = HTTPServer((EVENT_HOST, EVENT_PORT), _EventHandler)
-    callback_server = HTTPServer((CALLBACK_HOST, callback_port), _CallbackHandler)
+    event_server = ThreadingHTTPServer((EVENT_HOST, EVENT_PORT), _EventHandler)
+    callback_server = ThreadingHTTPServer((CALLBACK_HOST, callback_port), _CallbackHandler)
+    event_server.daemon_threads = True
+    callback_server.daemon_threads = True
 
     print(f"[{_now()}] 授权机器人已启动")
     print(f"[{_now()}] OneBot 事件接收: http://{EVENT_HOST}:{EVENT_PORT}")

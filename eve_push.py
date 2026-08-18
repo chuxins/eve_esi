@@ -16,6 +16,7 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import requests
 
@@ -51,6 +52,26 @@ def send_message(message, target_user=None, target_group=None):
         url = f"{base}/send_private_msg"
         payload = {"user_id": int(target_user), "message": message}
     resp = requests.post(url, json=payload, headers=headers, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def send_image_message(image_path, target_user=None, target_group=None, text=""):
+    """通过 OneBot 发送本地图片（可选附带文本），返回响应 JSON。"""
+    image_uri = Path(image_path).resolve().as_uri()
+    segments = []
+    if text:
+        segments.append({"type": "text", "data": {"text": text}})
+    segments.append({"type": "image", "data": {"file": image_uri}})
+
+    base, headers = _onebot_client()
+    if target_group:
+        url = f"{base}/send_group_msg"
+        payload = {"group_id": int(target_group), "message": segments}
+    else:
+        url = f"{base}/send_private_msg"
+        payload = {"user_id": int(target_user), "message": segments}
+    resp = requests.post(url, json=payload, headers=headers, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
