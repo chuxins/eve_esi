@@ -42,7 +42,8 @@ def fmt_isk(value):
     return f"{value:,.0f}"
 
 
-def plot_balance(config, char_arg=None, limit=200, output="balance_history.png"):
+def plot_balance(config, char_arg=None, limit=200, output="balance_history.png",
+                 current_balance=None, balance_source="ESI"):
     db = get_db(config)
     chars = resolve_characters(db, char_arg)
 
@@ -75,11 +76,17 @@ def plot_balance(config, char_arg=None, limit=200, output="balance_history.png")
 
     # 图表样式
     if has_chinese:
-        ax.set_title("钱包余额变动历史")
+        title = "钱包余额变动历史"
+        if current_balance is not None:
+            title += f"\n当前余额：{fmt_isk(current_balance)} ISK（{balance_source}）"
+        ax.set_title(title)
         ax.set_xlabel("时间")
         ax.set_ylabel("余额 (ISK)")
     else:
-        ax.set_title("Wallet Balance History")
+        title = "Wallet Balance History"
+        if current_balance is not None:
+            title += f"\nCurrent Balance: {fmt_isk(current_balance)} ISK ({balance_source})"
+        ax.set_title(title)
         ax.set_xlabel("Time")
         ax.set_ylabel("Balance (ISK)")
     ax.legend()

@@ -223,8 +223,18 @@ def _on_chart(user_id, text):
 
     character = matched[0]
     output = os.path.join(BASE_DIR, f"chart_{character['character_id']}.png")
+
+    # 优先从 ESI 获取当前余额，失败时回退数据库快照
+    current_balance, balance_source = _query_balance(config, db, character)
     try:
-        plot_balance(config, char_arg=name, limit=200, output=output)
+        plot_balance(
+            config,
+            char_arg=name,
+            limit=200,
+            output=output,
+            current_balance=current_balance,
+            balance_source=balance_source or "ESI",
+        )
     except SystemExit:
         try:
             send_message(f"❌ 角色「{name}」暂无余额历史数据，请稍后再试。", target_user=user_id)
