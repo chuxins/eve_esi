@@ -201,7 +201,11 @@ class ESIClient:
         返回条目列表，每条包含：transaction_id、journal_ref_id、type_id、
         location_id、client_id、date、is_buy、is_personal、quantity、unit_price。
         """
-        return self._get(f"/v3/characters/{character_id}/wallet/transactions/")
+        # from_id=0 显式请求完整交易列表；默认省略时 ESI 可能只返回部分较新/较旧记录。
+        return self._get(
+            f"/v3/characters/{character_id}/wallet/transactions/",
+            params={"from_id": 0},
+        )
 
     def get_universe_type(self, type_id):
         """获取 EVE 物品类型信息（用于 type_id -> 中文名称翻译）。"""
