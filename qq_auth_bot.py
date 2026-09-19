@@ -538,13 +538,24 @@ class _CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         query = parse_qs(urlparse(self.path).query)
         error = query.get("error", [None])[0]
+        detail = query.get("error_description", [None])[0]
         code = query.get("code", [None])[0]
         state = query.get("state", [None])[0]
 
+        # 记录每一次回调，便于排查「授权后没反应」这类问题
+        print(
+            f"[{_now()}] OAuth 回调: path={self.path[:100]!r} "
+            f"error={error} desc={detail} "
+            f"code={'有' if code else '无'} "
+            f"state={(state[:8] + '…') if state else '无'}"
+        )
+
         if error:
-            self._respond(400, f"<h1>授权失败</h1><p>{error}</p>")
+            print(f"[{_now()}] ⚠️ 授权失败：{error} {detail or ''}")
+            self._respond(400, f"<h1>授权失败</h1><p>{error}</p><p>{detail or ''}</p>")
             return
         if not code or not state:
+            print(f"[{_now()}] 回调缺少 code/state（多为扫描或误访问）")
             self._respond(400, "<h1>缺少授权码或 state</h1>")
             return
 
@@ -552,10 +563,12 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             entry = _pending.pop(state, None)
         if entry is None:
             # 非 QQ 机器人发起的 state：转发给 Eve-PI Web 的 SSO 回调处理
+            print(f"[{_now()}] state 未匹配（非本机器人发起），转发给 Eve-PI")
             self._forward_to_evepi(code, state)
             return
         verifier, created_at = entry
         if time.time() - created_at > STATE_TTL_SECONDS:
+            print(f"[{_now()}] state 已过期（超过 {STATE_TTL_SECONDS}s）")
             self._respond(400, "<h1>授权会话已过期，请重新在 QQ 发送「添加账号」</h1>")
             return
 
