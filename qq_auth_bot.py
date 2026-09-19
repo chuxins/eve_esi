@@ -360,14 +360,19 @@ def _reply(user_id, message):
         return False
 
 
-def _remember_fittings(user_id, character, fittings):
-    """记住本次列出的装配列表，供用户直接用序号查看详情。"""
+def _remember_fittings(user_id, character, fittings, candidate_indices=None):
+    """记住本次列出的装配列表，供用户直接用序号查看详情。
+
+    candidate_indices 非空时，表示本次展示的是**候选列表**，
+    此时只接受这些序号（其它序号不生效）。
+    """
     with _fitting_lock:
         if len(_fitting_context) > 200:  # 简单清理，避免长期占用
             _fitting_context.clear()
         _fitting_context[user_id] = {
             "character": character,
             "fittings": fittings,
+            "candidates": list(candidate_indices) if candidate_indices else None,
             "ts": time.time(),
         }
 
@@ -409,6 +414,15 @@ def _on_fitting_index(user_id, index_text, quiet=False):
     if not 1 <= index <= len(fittings):
         _reply(user_id, f"序号超出范围（1~{len(fittings)}）。"
                        f"发送「装配 {character['character_name']}」重新查看列表。")
+        return
+
+    # 上次展示的是候选列表时，只接受候选范围内的序号
+    candidates = context.get("candidates")
+    if candidates and index not in candidates:
+        shown = "、".join(str(i) for i in candidates[:12])
+        _reply(user_id, f"❗ 序号 {index} 不在本次候选范围内。\n"
+                       f"当前可输入：{shown}\n"
+                       f"（发送「装配 {character['character_name']}」可查看完整列表）")
         return
 
     fitting = fittings[index - 1]
@@ -515,7 +529,11 @@ def _on_fittings(user_id, text):
         elif candidates:
             message = format_candidates(fittings, candidates, names, mode,
                                         index_ttl=FITTING_CONTEXT_TTL)
-            _remember_fittings(user_id, character, fittings)
+            index_of = {id(f): i for i, f in enumerate(fittings)}
+            _remember_fittings(
+                user_id, character, fittings,
+                candidate_indices=sorted(index_of.get(id(f), 0) + 1 for f in candidates),
+            )
         else:
             message = f"未找到匹配「{selector}」的装配（{cname} 共 {len(fittings)} 套）"
 
