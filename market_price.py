@@ -237,6 +237,52 @@ def get_price_table():
     return _load_price_table()
 
 
+# Jita 4-4 最低卖价的进程内缓存：{type_id: (price, ts)}；ESI 挂单本身约 5 分钟更新
+_jita_sell_cache = {}
+JITA_SELL_TTL = 600  # 秒
+
+
+def jita_sell_prices(type_ids, user_agent=DEFAULT_UA, workers=8, ttl=JITA_SELL_TTL):
+    """并发查询一批 type_id 的 Jita 4-4 最低卖单价，返回 {type_id: 单价}。
+
+    无挂单的物品不会出现在结果里；结果带进程内缓存（ttl 秒），
+    重复查看同一套装配时几乎不产生请求。
+    """
+    ids = sorted({int(t) for t in type_ids if t})
+    if not ids:
+        return {}
+
+    now = time.time()
+    prices = {}
+    todo = []
+    for type_id in ids:
+        cached = _jita_sell_cache.get(type_id)
+        if cached and now - cached[1] <= ttl:
+            if cached[0]:
+                prices[type_id] = cached[0]
+        else:
+            todo.append(type_id)
+    if not todo:
+        return prices
+
+    client = ESIClient(None, user_agent)
+
+    def work(type_id):
+        try:
+            orders = client.get_region_orders(FORGE_REGION_ID, type_id)
+            return type_id, _calc_prices(orders)["sell"]
+        except Exception as exc:  # 单个物品失败不影响整体
+            print(f"  Jita 卖价查询失败 type_id={type_id}: {exc}")
+            return type_id, None
+
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(todo)))) as pool:
+        for type_id, price in pool.map(work, todo):
+            _jita_sell_cache[type_id] = (price, time.time())
+            if price:
+                prices[type_id] = price
+    return prices
+
+
 def refresh_price_cache(client=None, user_agent=DEFAULT_UA, quiet=False):
     """下载 ESI 全局参考价并写入缓存（磁盘 + 内存），返回缓存条目数。"""
     if client is None:

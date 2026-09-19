@@ -12,7 +12,7 @@
 
 用法：
     python3 fittings.py chuxins1              # 列出该角色全部装配
-    python3 fittings.py chuxins1 3            # 查看第 3 套详情
+    python3 fittings.py chuxins1 3            # 查看第 3 套详情（EFT 格式，附装配ID/估价）
     python3 fittings.py chuxins1 狂暴          # 按舰船名查看（如狂暴级的所有装配）
 """
 
@@ -251,7 +251,10 @@ def format_detail(fitting, names, prices=None):
     return "\n".join(lines)
 
 
-def format_eft(fitting, names, names_en=None, language="zh"):
+SEPARATOR = "─" * 16  # 输出里的分隔横线
+
+
+def format_eft(fitting, names, names_en=None, language="zh", footer=None):
     """按 EFT 格式输出整套装配，可直接粘贴进游戏「导入装配」或分享给他人。
 
     输出即为纯 EFT 文本（无额外说明行），便于整段复制：
@@ -300,23 +303,42 @@ def format_eft(fitting, names, names_en=None, language="zh"):
                     lines.append(f"{item_name(item['type_id'])}\n")
         lines.append("\n")  # 组间空行（空组也占一个）
 
-    text = "".join(lines)
-    return text.rstrip("\n")
+    text = "".join(lines).rstrip("\n")
+    if footer:
+        text += "\n\n\n" + footer  # 空两行后接横线与补充信息
+    return text
+
+
+def eft_footer(fitting, prices, source_note=""):
+    """EFT 输出下方的补充信息：装配 ID + 参考估价（不参与导入，仅便于查看）。"""
+    lines = [SEPARATOR, f"🆔 装配ID {fitting.get('fitting_id')}"]
+    if prices:
+        total, priced, count = estimate_value(fitting, prices)
+        note = f"{source_note}，" if source_note else ""
+        lines.append(
+            f"💰 参考估价：{total:,.2f} ISK"
+            f"（{note}{priced}/{count} 种物品已定价，不含舰船）"
+        )
+    else:
+        lines.append("💰 参考估价：暂无价格数据")
+    return "\n".join(lines)
 
 
 def estimate_value(fitting, prices):
-    """按全局参考均价估算整套装配价值，返回 (总额, 已定价种类数, 总种类数)。"""
+    """按给定单价表估算整套装配价值，返回 (总额, 已定价种类数, 总种类数)。"""
     if not prices:
         return 0.0, 0, 0
-    total = 0.0
-    priced = 0
     items = fitting.get("items") or []
+    types = {int(i["type_id"]) for i in items}
+    total = 0.0
+    priced = set()
     for item in items:
-        unit = prices.get(int(item["type_id"]))
+        type_id = int(item["type_id"])
+        unit = prices.get(type_id)
         if unit:
             total += float(unit) * int(item.get("quantity") or 1)
-            priced += 1
-    return total, priced, len(items)
+            priced.add(type_id)
+    return total, len(priced), len(types)
 
 
 # ---------------------------------------------------------------- CLI

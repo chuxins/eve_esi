@@ -27,11 +27,11 @@ from auth import OAuthError, build_authorization_url, exchange_code, verify
 from esi_client import ESIClient, translate_description
 from eve_push import send_image_message, send_message
 from fittings import (FittingError, FittingScopeError, collect_type_ids,
-                      fetch_fittings, format_candidates, format_detail,
-                      format_eft, format_list, resolve_fitting)
+                      eft_footer, fetch_fittings, format_candidates,
+                      format_detail, format_eft, format_list, resolve_fitting)
 from main import get_access_token, get_db, load_config
 from market_price import (MAX_BATCH_ITEMS, PRICE_CACHE_TTL, format_batch_message,
-                          format_price_message, get_price_table,
+                          format_price_message, get_price_table, jita_sell_prices,
                           parse_batch_query, parse_item_query, price_cache_age,
                           query_batch, query_item, refresh_price_cache)
 from plot_balance import plot_balance
@@ -360,15 +360,18 @@ FITTING_DETAIL_MODES = {
 }
 
 
-def _render_fitting_detail(fitting, db, names, mode="eft"):
-    """渲染单套装配：默认 EFT（中文），en = 英文 EFT，grouped = 分槽位视图。"""
+def _render_fitting_detail(fitting, db, names, mode="eft", user_agent=None):
+    """渲染单套装配：默认 EFT（中文，尾部附装配ID与 Jita 4-4 估价），
+    en = 英文 EFT，grouped = 分槽位视图（用全局均价估价）。"""
     if mode == "grouped":
         return format_detail(fitting, names, get_price_table())
     names_en = None
     if mode == "en":
         names_en = db.get_item_type_names_en(collect_type_ids([fitting]))
+    prices = jita_sell_prices(collect_type_ids([fitting]), user_agent=user_agent)
+    footer = eft_footer(fitting, prices, "Jita 4-4 出售价")
     return format_eft(fitting, names, names_en,
-                      language="en" if mode == "en" else "zh")
+                      language="en" if mode == "en" else "zh", footer=footer)
 
 
 def _reply(user_id, message):
@@ -445,9 +448,11 @@ def _on_fitting_index(user_id, index_text, quiet=False):
         return
 
     fitting = fittings[index - 1]
-    db = get_db(load_config())
+    config = load_config()
+    db = get_db(config)
     names = db.get_item_type_names(collect_type_ids([fitting]))
-    if not _reply(user_id, _render_fitting_detail(fitting, db, names)):
+    if not _reply(user_id, _render_fitting_detail(fitting, db, names,
+                                                  user_agent=config["user_agent"])):
         return
     print(f"[{_now()}] 已发送 {character['character_name']} 第 {index} 套装配详情给 {user_id}")
 
@@ -552,7 +557,8 @@ def _on_fittings(user_id, text):
     else:
         fitting, candidates, mode = resolve_fitting(fittings, selector, names)
         if fitting is not None:
-            message = _render_fitting_detail(fitting, db, names, detail_mode)
+            message = _render_fitting_detail(fitting, db, names, detail_mode,
+                                             user_agent=config["user_agent"])
         elif candidates:
             message = format_candidates(fittings, candidates, names, mode)
             index_of = {id(f): i for i, f in enumerate(fittings)}
