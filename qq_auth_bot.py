@@ -121,6 +121,9 @@ def handle_event(event):
         _on_add_account(user_id)
     elif text in ("账号列表", "查看账号", "账号"):
         _on_list_accounts(user_id)
+    elif text.isdigit():
+        # 纯数字：按上次「装配」列表的序号看详情（无上下文则静默忽略）
+        _on_fitting_index(user_id, text, quiet=True)
     elif _is_command(text, "批量查价"):
         _on_batch_price(user_id, text)
     elif _is_command(text, "查价"):
@@ -340,6 +343,70 @@ def _on_journal(user_id, text):
         print(f"[{_now()}] 发送流水失败: {exc}")
 
 
+# 记录每个用户最近一次「装配」列表，便于直接用序号查看详情
+_fitting_context = {}
+_fitting_lock = threading.Lock()
+FITTING_CONTEXT_TTL = 600  # 秒
+
+
+def _reply(user_id, message):
+    """发送私聊消息（失败只记日志，不抛出）。"""
+    try:
+        send_message(message, target_user=user_id)
+        return True
+    except Exception as exc:
+        print(f"[{_now()}] 发送消息失败: {exc}")
+        return False
+
+
+def _remember_fittings(user_id, character, fittings):
+    """记住本次列出的装配列表，供用户直接用序号查看详情。"""
+    with _fitting_lock:
+        if len(_fitting_context) > 200:  # 简单清理，避免长期占用
+            _fitting_context.clear()
+        _fitting_context[user_id] = {
+            "character": character,
+            "fittings": fittings,
+            "ts": time.time(),
+        }
+
+
+def _load_fittings_context(user_id):
+    """取出未过期的装配列表上下文；无则返回 None。"""
+    with _fitting_lock:
+        context = _fitting_context.get(user_id)
+    if not context or time.time() - context["ts"] > FITTING_CONTEXT_TTL:
+        return None
+    return context
+
+
+def _on_fitting_index(user_id, index_text, quiet=False):
+    """按序号查看上次列出的装配详情（无需再带角色名）。
+
+    quiet=True 时（纯数字消息、且无上下文）不作任何回复。
+    """
+    context = _load_fittings_context(user_id)
+    if not context:
+        if not quiet:
+            _reply(user_id, "请先发送「装配 <角色名>」查看装配列表，再用序号查看详情。")
+        return
+
+    fittings = context["fittings"]
+    character = context["character"]
+    index = int(index_text)
+    if not 1 <= index <= len(fittings):
+        _reply(user_id, f"序号超出范围（1~{len(fittings)}）。"
+                       f"发送「装配 {character['character_name']}」重新查看列表。")
+        return
+
+    fitting = fittings[index - 1]
+    db = get_db(load_config())
+    names = db.get_item_type_names(collect_type_ids([fitting]))
+    if not _reply(user_id, format_detail(fitting, names, get_price_table())):
+        return
+    print(f"[{_now()}] 已发送 {character['character_name']} 第 {index} 套装配详情给 {user_id}")
+
+
 def _on_fittings(user_id, text):
     """处理「装配 <角色名> [序号|关键词]」指令：查看角色已保存的装配方案。
 
@@ -350,7 +417,8 @@ def _on_fittings(user_id, text):
         try:
             send_message(
                 "请使用格式：装配 <角色名> [序号或舰船名]\n"
-                "如：装配 chuxins1 ｜ 装配 chuxins1 3 ｜ 装配 chuxins1 狂暴（按舰船名）",
+                "如：装配 chuxins1 ｜ 装配 chuxins1 3 ｜ 装配 chuxins1 狂暴（按舰船名）\n"
+                "列表发出后，直接回复序号即可看详情",
                 target_user=user_id,
             )
         except Exception as exc:
@@ -367,6 +435,10 @@ def _on_fittings(user_id, text):
         c for c in db.list_characters()
         if str(c["character_id"]) == char_arg or c["character_name"] == char_arg
     ]
+    # 「装配 <序号>」（不是角色）→ 用上次列出的列表查看详情
+    if not matched and selector is None and char_arg.isdigit():
+        _on_fitting_index(user_id, char_arg)
+        return
     if not matched:
         try:
             send_message(
@@ -423,12 +495,14 @@ def _on_fittings(user_id, text):
 
     if not selector:
         message = format_list(fittings, cname, names)
+        _remember_fittings(user_id, character, fittings)
     else:
         fitting, candidates, mode = resolve_fitting(fittings, selector, names)
         if fitting is not None:
             message = format_detail(fitting, names, get_price_table())
         elif candidates:
             message = format_candidates(fittings, candidates, names, mode)
+            _remember_fittings(user_id, character, fittings)
         else:
             message = f"未找到匹配「{selector}」的装配（{cname} 共 {len(fittings)} 套）"
 

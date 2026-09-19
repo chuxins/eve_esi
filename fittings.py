@@ -157,7 +157,7 @@ def format_candidates(fittings, candidates, names, mode=None):
     title = f"🔍 匹配到 {len(candidates)} 套"
     if mode == "ship":
         title += "（按舰船名）"
-    lines = [title + "，请用序号查看详情：", "────────────────"]
+    lines = [title + "，直接回复序号看详情：", "────────────────"]
     index_of = {id(f): i for i, f in enumerate(fittings)}
     for fitting in candidates[:12]:
         idx = index_of.get(id(fitting), 0) + 1
@@ -185,7 +185,8 @@ def format_list(fittings, character_name, names):
     if len(fittings) > LIST_LIMIT:
         lines.append(f"…另有 {len(fittings) - LIST_LIMIT} 套未列出，可用关键词查看")
     lines.append("────────────────")
-    lines.append(f"发送「装配 {character_name} <序号、舰船名或关键词>」查看详情")
+    lines.append("直接回复序号即可查看详情（如：1）")
+    lines.append(f"也可用「装配 {character_name} <序号、舰船名或关键词>」")
     return "\n".join(lines)
 
 
