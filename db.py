@@ -604,6 +604,21 @@ class Database:
                 row = cur.fetchone()
                 return int(row["n"]), int(row["n_en"])
 
+    def get_item_type_names_en(self, type_ids):
+        """返回 {type_id: 英文名}（无英文名的条目不包含在内）。"""
+        ids = [int(x) for x in type_ids if x]
+        if not ids:
+            return {}
+        placeholders = ",".join(["%s"] * len(ids))
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT type_id, name_en FROM item_types "
+                    f"WHERE name_en IS NOT NULL AND type_id IN ({placeholders})",
+                    ids,
+                )
+                return {int(r["type_id"]): r["name_en"] for r in cur.fetchall()}
+
     def get_item_type_names(self, type_ids):
         """返回 {type_id: name} 字典。"""
         ids = [int(x) for x in type_ids if x]

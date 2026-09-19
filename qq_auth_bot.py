@@ -28,7 +28,7 @@ from esi_client import ESIClient, translate_description
 from eve_push import send_image_message, send_message
 from fittings import (FittingError, FittingScopeError, collect_type_ids,
                       fetch_fittings, format_candidates, format_detail,
-                      format_list, resolve_fitting)
+                      format_eft, format_list, resolve_fitting)
 from main import get_access_token, get_db, load_config
 from market_price import (MAX_BATCH_ITEMS, PRICE_CACHE_TTL, format_batch_message,
                           format_price_message, get_price_table,
@@ -160,6 +160,7 @@ def _on_menu(user_id):
         "• 「查价」可带数量：查价 三钛合金*1000 → 同时给出总价",
         "• 「查价」名称支持模糊：查价 三钛 → 自动匹配到 三钛合金",
         "• 「装配」查角色已保存的装配：装配 chuxins1 [序号/舰船名]",
+        "• 「装配」详情为 EFT 格式，可直接导入游戏；加「英文」用英文名",
         "• 多项查价：批量查价（每行一个 物品名称*数量，输出三项总计）",
         "• 「查价」物品名支持中文或英文（如：三钛合金 / Tritanium）",
     ]
@@ -349,6 +350,26 @@ _fitting_lock = threading.Lock()
 FITTING_CONTEXT_TTL = 30  # 秒：列出列表后，可用序号看详情的有效窗口
 FITTING_HINT_TTL = 60     # 秒：超过此时长就算再输序号也完全静默，不打扰
 
+# 「装配 <角色名> <序号> <后缀>」支持的后缀
+# 默认输出 EFT（中文，可直接导入游戏）；英文改为英文物品名；详情为旧的分槽位视图
+FITTING_DETAIL_MODES = {
+    "英文": "en",
+    "en": "en",
+    "详情": "grouped",
+    "槽位": "grouped",
+}
+
+
+def _render_fitting_detail(fitting, db, names, mode="eft"):
+    """渲染单套装配：默认 EFT（中文），en = 英文 EFT，grouped = 分槽位视图。"""
+    if mode == "grouped":
+        return format_detail(fitting, names, get_price_table())
+    names_en = None
+    if mode == "en":
+        names_en = db.get_item_type_names_en(collect_type_ids([fitting]))
+    return format_eft(fitting, names, names_en,
+                      language="en" if mode == "en" else "zh")
+
 
 def _reply(user_id, message):
     """发送私聊消息（失败只记日志，不抛出）。"""
@@ -426,7 +447,7 @@ def _on_fitting_index(user_id, index_text, quiet=False):
     fitting = fittings[index - 1]
     db = get_db(load_config())
     names = db.get_item_type_names(collect_type_ids([fitting]))
-    if not _reply(user_id, format_detail(fitting, names, get_price_table())):
+    if not _reply(user_id, _render_fitting_detail(fitting, db, names)):
         return
     print(f"[{_now()}] 已发送 {character['character_name']} 第 {index} 套装配详情给 {user_id}")
 
@@ -452,6 +473,14 @@ def _on_fittings(user_id, text):
     parts = arg.split(maxsplit=1)
     char_arg = parts[0]
     selector = parts[1].strip() if len(parts) > 1 else None
+
+    # 支持「装配 <角色名> <序号> 英文 / 详情」后缀
+    detail_mode = "eft"
+    if selector:
+        tokens = selector.split()
+        if len(tokens) > 1 and tokens[-1].lower() in FITTING_DETAIL_MODES:
+            detail_mode = FITTING_DETAIL_MODES[tokens[-1].lower()]
+            selector = " ".join(tokens[:-1])
 
     config = load_config()
     db = get_db(config)
@@ -523,7 +552,7 @@ def _on_fittings(user_id, text):
     else:
         fitting, candidates, mode = resolve_fitting(fittings, selector, names)
         if fitting is not None:
-            message = format_detail(fitting, names, get_price_table())
+            message = _render_fitting_detail(fitting, db, names, detail_mode)
         elif candidates:
             message = format_candidates(fittings, candidates, names, mode)
             index_of = {id(f): i for i, f in enumerate(fittings)}

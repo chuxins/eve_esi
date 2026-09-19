@@ -43,6 +43,21 @@ SLOT_GROUPS = (
 )
 FALLBACK_LABEL = "❓ 其它"
 
+# EFT 导出顺序（与游戏内「导出装配」一致）：低槽 → 中槽 → 高槽 → 改装件 →
+# 子系统 → 服务槽 → 无人机舱 → 铁骑舰载机舱 → 货舱；组间空一行，空组也占一个空行。
+EFT_GROUP_ORDER = (
+    ("LoSlot", "low"),
+    ("MedSlot", "med"),
+    ("HiSlot", "high"),
+    ("RigSlot", "rig"),
+    ("SubSystemSlot", "subsystem"),
+    ("ServiceSlot", "service"),
+    ("DroneBay", "drone"),
+    ("FighterBay", "fighter"),
+    ("Cargo", "cargo"),
+)
+EFT_STACKED_GROUPS = ("drone", "fighter", "cargo")  # 这些组用 name xN 写法
+
 
 class FittingError(RuntimeError):
     """装配查询相关错误。"""
@@ -185,7 +200,7 @@ def format_list(fittings, character_name, names):
     if len(fittings) > LIST_LIMIT:
         lines.append(f"…另有 {len(fittings) - LIST_LIMIT} 套未列出，可用关键词查看")
     lines.append("────────────────")
-    lines.append("直接回复序号即可查看详情（如：1）")
+    lines.append("直接回复序号即可查看详情（EFT 格式，可直接导入游戏）")
     lines.append(f"也可用「装配 {character_name} <序号、舰船名或关键词>」")
     return "\n".join(lines)
 
@@ -234,6 +249,59 @@ def format_detail(fitting, names, prices=None):
                 f"（按 ESI 全局均价，{priced}/{count} 种物品已定价）"
             )
     return "\n".join(lines)
+
+
+def format_eft(fitting, names, names_en=None, language="zh"):
+    """按 EFT 格式输出整套装配，可直接粘贴进游戏「导入装配」或分享给他人。
+
+    输出即为纯 EFT 文本（无额外说明行），便于整段复制：
+        [舰船名, 装配名]
+        低槽装备（每件一行）
+        （空行）
+        中槽装备
+        …
+        无人机 xN
+        货舱物品 xN
+
+    language="en" 时使用英文物品名（部分客户端只能识别英文名）。
+    """
+    def item_name(type_id):
+        type_id = int(type_id)
+        if language == "en":
+            return (names_en or {}).get(type_id) or names.get(type_id) or f"#{type_id}"
+        return names.get(type_id) or (names_en or {}).get(type_id) or f"#{type_id}"
+
+    def slot_index(flag):
+        digits = "".join(ch for ch in str(flag) if ch.isdigit())
+        return int(digits) if digits else 0
+
+    grouped = {key: [] for _, key in EFT_GROUP_ORDER}
+    for item in fitting.get("items") or []:
+        flag = str(item.get("flag") or "")
+        for prefix, key in EFT_GROUP_ORDER:
+            if flag.startswith(prefix):
+                grouped[key].append((slot_index(flag), item))
+                break
+
+    ship = _name_of(names, fitting.get("ship_type_id")) if fitting.get("ship_type_id") else "?"
+    if language == "en" and names_en and fitting.get("ship_type_id"):
+        ship = names_en.get(int(fitting["ship_type_id"])) or ship
+
+    lines = [f"[{ship}, {fitting.get('name') or 'Unnamed'}]\n"]
+    for _, key in EFT_GROUP_ORDER:
+        entries = grouped[key]
+        if key in EFT_STACKED_GROUPS:
+            for _, item in sorted(entries, key=lambda e: item_name(e[1]["type_id"])):
+                quantity = max(1, int(item.get("quantity") or 1))
+                lines.append(f"{item_name(item['type_id'])} x{quantity}\n")
+        else:
+            for _, item in sorted(entries, key=lambda e: e[0]):
+                for _ in range(max(1, int(item.get("quantity") or 1))):
+                    lines.append(f"{item_name(item['type_id'])}\n")
+        lines.append("\n")  # 组间空行（空组也占一个）
+
+    text = "".join(lines)
+    return text.rstrip("\n")
 
 
 def estimate_value(fitting, prices):
