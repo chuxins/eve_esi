@@ -20,3 +20,10 @@ push_state.json
 # 生成产物
 report.html
 balance_history.png
+chart_*.png
+price_chart_*.png
+
+# SDE 静态数据（build_item_index.py 用）
+sde.zip
+sde.zip.part
+market_prices.json

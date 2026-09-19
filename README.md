@@ -185,9 +185,19 @@ python constellation_kills.py --check
 
 **支持命令：**
 ```
-查询 <角色名>     查询角色 ISK 余额（如：查询 chuxins1）
-查询             列出所有可用角色
+余额 <角色名>     查询角色 ISK 余额（如：余额 chuxins1）
+余额             列出所有可用角色
+流水 <角色名>     查询该角色最近 10 条钱包流水（如：流水 chuxins1）
+图表 <角色名>     生成并推送该角色余额图表
+查价 <物品名称>*数量  查询该物品 Jita 收购/出售/中间价并推送走势图（名称支持模糊，数量可省，如：查价 三钛*1000）
+批量查价 <物品名称>*数量  每行一个物品，输出所有物品的 Jita 4-4 总收购价/总出售价/总中间价（只有一行时等同「查价」）
+添加账号          获取 EVE 账号授权链接（10 分钟内有效）
+账号列表          列出所有已授权角色（别名：查看账号 / 账号）
+菜单             列出所有可用指令及使用格式
 ```
+
+> 输入容错：指令与参数之间可用空格或冒号等分隔符（如 `查价：三钛合金*100`、`流水：chuxins1`）；
+> `物品*` 数量留空时按 1 计算（如 `艾玛穿梭机蓝图*` = 数量 1）。
 
 **运行命令服务：**
 ```bash
@@ -237,9 +247,36 @@ pkill -f qq_bot.py                            # 停止
 | `main.py` | 主入口（多角色命令行交互）|
 | `auth.py` | EVE SSO OAuth2 授权与 token 刷新（纯 OAuth 逻辑）|
 | `db.py` | MySQL 数据库访问层（角色 / token / 流水 / 余额）|
-| `esi_client.py` | ESI API 客户端（余额 / journal 查询与统计）|
+| `esi_client.py` | ESI API 客户端（余额 / journal 查询与统计 / 市场行情）|
+| `market_price.py` | Jita 行情查询（名称解析 / 收购价-出售价-中间价 / 走势图）|
+| `build_item_index.py` | 从官方 SDE 构建本地物品名索引（供模糊查询）|
+| `charts.py` | matplotlib 中文字体等公共辅助 |
 | `schema.sql` | 数据库表结构（程序启动时自动初始化）|
 | `config.example.json` | 配置模板 |
+
+## 物品名模糊查询与价格兜底
+
+「查价」在精确匹配失败时会回退到本地物品索引做模糊匹配（中英文均可）。
+索引来自 EVE 官方 SDE 的 `types.jsonl`，取其中「已发布且在市场分类下」的约 1.9 万个物品：
+
+```bash
+python3 build_item_index.py            # 首次构建（下载 SDE，约 95MB）；之后默认复用本地 sde.zip
+python3 build_item_index.py --stats    # 查看索引统计与抽样匹配
+python3 build_item_index.py --reset    # 清空后重建（用于修正已写入的名称）
+```
+
+游戏更新后重新跑一次即可刷新索引；`sde.zip` 已在 `.gitignore` 中。
+
+**无挂单物品的兜底**：PLEX（伊甸币）这类物品在 ESI 中**没有任何星域挂单与历史行情**，
+此时会退回 `GET /v1/markets/prices/` 的全局参考均价，并在消息中标注来源。
+该端点单次约 5~25 秒、约 1MB，因此改为缓存：
+
+```bash
+python3 market_price.py --refresh-prices   # 手动刷新参考价缓存
+```
+
+缓存写在 `market_prices.json`（已 gitignore）；`qq_auth_bot.py` 有后台线程每小时检查、
+超过 24 小时自动刷新，指令本身始终秒回。
 
 ## 安全提示
 
