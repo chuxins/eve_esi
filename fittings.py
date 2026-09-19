@@ -246,7 +246,7 @@ def format_detail(fitting, names, prices=None):
             lines.append("────────────────")
             lines.append(
                 f"💰 参考估价：{total:,.2f} ISK"
-                f"（按 ESI 全局均价，{priced}/{count} 种物品已定价）"
+                f"（按 ESI 全局均价，{priced}/{count} 种物品已定价，含舰船船体）"
             )
     return "\n".join(lines)
 
@@ -317,7 +317,7 @@ def eft_footer(fitting, prices, source_note=""):
         note = f"{source_note}，" if source_note else ""
         lines.append(
             f"💰 参考估价：{total:,.2f} ISK"
-            f"（{note}{priced}/{count} 种物品已定价，不含舰船）"
+            f"（{note}{priced}/{count} 种物品已定价，含舰船船体）"
         )
     else:
         lines.append("💰 参考估价：暂无价格数据")
@@ -325,20 +325,22 @@ def eft_footer(fitting, prices, source_note=""):
 
 
 def estimate_value(fitting, prices):
-    """按给定单价表估算整套装配价值，返回 (总额, 已定价种类数, 总种类数)。"""
+    """按给定单价表估算整套装配价值（**含舰船船体**），
+    返回 (总额, 已定价种类数, 总种类数)。"""
     if not prices:
         return 0.0, 0, 0
-    items = fitting.get("items") or []
-    types = {int(i["type_id"]) for i in items}
+    entries = [(int(i["type_id"]), int(i.get("quantity") or 1))
+               for i in fitting.get("items") or []]
+    if fitting.get("ship_type_id"):
+        entries.append((int(fitting["ship_type_id"]), 1))
     total = 0.0
     priced = set()
-    for item in items:
-        type_id = int(item["type_id"])
+    for type_id, quantity in entries:
         unit = prices.get(type_id)
         if unit:
-            total += float(unit) * int(item.get("quantity") or 1)
+            total += float(unit) * quantity
             priced.add(type_id)
-    return total, len(priced), len(types)
+    return total, len(priced), len({tid for tid, _ in entries})
 
 
 # ---------------------------------------------------------------- CLI
