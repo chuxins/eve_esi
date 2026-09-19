@@ -13,6 +13,7 @@
     pkill -f qq_auth_bot.py
 """
 
+import base64
 import http.client
 import json
 import os
@@ -592,6 +593,20 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         pass
 
 
+def _granted_scopes(access_token):
+    """从 access_token（JWT）中解析 EVE 实际授予的 scope 列表。
+
+    ESI 的 token 响应不带 scope 字段，只有 JWT 的 scp 声明是权威的。
+    """
+    try:
+        payload = str(access_token).split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return list(claims.get("scp") or [])
+    except Exception:
+        return []
+
+
 def _finish_authorize(code, verifier):
     config = load_config()
     db = get_db(config)
@@ -611,11 +626,26 @@ def _finish_authorize(code, verifier):
         db.upsert_token(cid, token)
         print(f"[{_now()}] ✅ 已授权角色：{name} (ID:{cid})")
 
+        # 校验 EVE 实际授予的权限：SSO 可能复用旧同意记录而漏发新增的 scope
+        granted = set(_granted_scopes(token.get("access_token")))
+        missing = sorted(set(config.get("scopes") or []) - granted)
+        if missing:
+            print(f"[{_now()}] ⚠️ 授权缺少 scope：{missing}")
+        elif granted:
+            print(f"[{_now()}] 已授予 scope：{sorted(granted)}")
+
         push_cfg = config.get("push", {})
         target = push_cfg.get("target_user")
         if target:
+            msg = f"✅ 新账号已授权：{name} (ID:{cid})"
+            if missing:
+                msg += (
+                    "\n⚠️ 但 EVE 未授予以下权限：" + "、".join(missing)
+                    + "\n请在 EVE 账号设置里「撤销本应用的授权」后，再重新发送「添加账号」"
+                    "（EVE SSO 会复用旧同意记录，导致新增权限不生效）"
+                )
             try:
-                send_message(f"✅ 新账号已授权：{name} (ID:{cid})", target_user=target)
+                send_message(msg, target_user=target)
             except Exception as exc:
                 print(f"[{_now()}] 授权成功但通知失败: {exc}")
     except OAuthError as exc:

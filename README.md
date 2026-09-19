@@ -199,6 +199,12 @@ python constellation_kills.py --check
 > 输入容错：指令与参数之间可用空格或冒号等分隔符（如 `查价：三钛合金*100`、`流水：chuxins1`）；
 > `物品*` 数量留空时按 1 计算（如 `艾玛穿梭机蓝图*` = 数量 1）。
 
+**新增权限 / 重新授权**：EVE SSO 会复用你之前的授权同意记录 —— 在 `config.json` 里
+新增 scope 后直接重新授权**可能不会生效**（token 中仍缺少新权限）。
+此时需先在 EVE 账号设置里**撤销本应用的授权**（Third Party Applications → Revoke），
+再发送「添加账号」重新授权。机器人会在授权完成时校验 JWT（`scp`）中实际授予的权限，
+缺少时直接推送提示。
+
 **运行命令服务：**
 ```bash
 cd eve_esi
