@@ -13,7 +13,7 @@
 用法：
     python3 fittings.py chuxins1              # 列出该角色全部装配
     python3 fittings.py chuxins1 3            # 查看第 3 套详情
-    python3 fittings.py chuxins1 联盟标配       # 按名称关键词查看
+    python3 fittings.py chuxins1 狂暴          # 按舰船名查看（如狂暴级的所有装配）
 """
 
 import argparse
@@ -111,28 +111,64 @@ def group_items(fitting):
 
 # ---------------------------------------------------------------- 选择
 
-def resolve_fitting(fittings, selector):
-    """按序号（1 起）或名称关键词挑选装配。
+def resolve_fitting(fittings, selector, names=None):
+    """按序号、**舰船名**或装配名挑选装配。
 
-    返回 (命中的装配或 None, 候选列表)。候选多于 1 时由调用方提示用户。
+    优先级：序号 → 装配名精确匹配 → **舰船名（子串）** → 装配名子串（兜底）
+    返回 (命中的装配或 None, 候选列表, 匹配方式)；匹配方式为
+    "index" / "name" / "ship" / "loose" / None。
+    候选多于 1 套时由调用方提示用户用序号选择。
     """
     selector = str(selector or "").strip()
     if not selector:
-        return None, []
+        return None, [], None
     if selector.isdigit():
         index = int(selector) - 1
         if 0 <= index < len(fittings):
-            return fittings[index], []
-        return None, []
+            return fittings[index], [], "index"
+        return None, [], None
 
     lowered = selector.lower()
-    for fitting in fittings:  # 先精确匹配
+    for fitting in fittings:  # 装配名精确匹配
         if str(fitting.get("name", "")).lower() == lowered:
-            return fitting, []
-    candidates = [f for f in fittings if lowered in str(f.get("name", "")).lower()]
-    if len(candidates) == 1:
-        return candidates[0], candidates
-    return None, candidates
+            return fitting, [], "name"
+
+    if names:
+        # 关键词按舰船名匹配（如「狂暴」「台风级」）
+        ship_hits = [
+            f for f in fittings
+            if lowered in str(names.get(int(f.get("ship_type_id") or 0), "")).lower()
+        ]
+        if len(ship_hits) == 1:
+            return ship_hits[0], ship_hits, "ship"
+        if ship_hits:
+            return None, ship_hits, "ship"
+
+    loose = [f for f in fittings if lowered in str(f.get("name", "")).lower()]
+    if len(loose) == 1:
+        return loose[0], loose, "loose"
+    if loose:
+        return None, loose, "loose"
+    return None, [], None
+
+
+def format_candidates(fittings, candidates, names, mode=None):
+    """列出候选装配，使用**全局序号**（可直接用该序号查看详情）。"""
+    title = f"🔍 匹配到 {len(candidates)} 套"
+    if mode == "ship":
+        title += "（按舰船名）"
+    lines = [title + "，请用序号查看详情：", "────────────────"]
+    index_of = {id(f): i for i, f in enumerate(fittings)}
+    for fitting in candidates[:12]:
+        idx = index_of.get(id(fitting), 0) + 1
+        ship = _name_of(names, fitting.get("ship_type_id")) if fitting.get("ship_type_id") else "?"
+        name = str(fitting.get("name") or "(未命名)")
+        if len(name) > 24:
+            name = name[:24] + "…"
+        lines.append(f"{idx}. {name} — {ship}")
+    if len(candidates) > 12:
+        lines.append(f"…另有 {len(candidates) - 12} 套")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- 展示
@@ -149,7 +185,7 @@ def format_list(fittings, character_name, names):
     if len(fittings) > LIST_LIMIT:
         lines.append(f"…另有 {len(fittings) - LIST_LIMIT} 套未列出，可用关键词查看")
     lines.append("────────────────")
-    lines.append(f"发送「装配 {character_name} <序号或名称关键词>」查看详情")
+    lines.append(f"发送「装配 {character_name} <序号、舰船名或关键词>」查看详情")
     return "\n".join(lines)
 
 
@@ -180,13 +216,13 @@ def format_detail(fitting, names, prices=None):
         text = " ｜ ".join(shown)
         if len(parts) > GROUP_ITEM_LIMIT:
             text += f" …等 {len(parts)} 种"
-        lines.append(f"{label}({len(parts)})：{text}")
+        lines.append(f"{label}({len(parts)} 种)：{text}")
     if groups.get(FALLBACK_LABEL):
         parts = [
             f"{_name_of(names, tid)} ×{qty}" if qty > 1 else _name_of(names, tid)
             for tid, qty in sorted(groups[FALLBACK_LABEL].items(), key=lambda kv: -kv[1])
         ]
-        lines.append(f"{FALLBACK_LABEL}({len(parts)})：{' ｜ '.join(parts[:GROUP_ITEM_LIMIT])}")
+        lines.append(f"{FALLBACK_LABEL}({len(parts)} 种)：{' ｜ '.join(parts[:GROUP_ITEM_LIMIT])}")
 
     if prices:
         total, priced, count = estimate_value(fitting, prices)
@@ -250,12 +286,10 @@ def main():
         print(format_list(fittings, character["character_name"], names))
         return
 
-    fitting, candidates = resolve_fitting(fittings, args.selector)
+    fitting, candidates, mode = resolve_fitting(fittings, args.selector, names)
     if fitting is None:
         if candidates:
-            print(f"匹配到 {len(candidates)} 套，请用序号或更完整的名称：")
-            for i, f in enumerate(candidates[:10], start=1):
-                print(f"  {i}. {f.get('name')}")
+            print(format_candidates(fittings, candidates, names, mode))
         else:
             print(f"未找到匹配「{args.selector}」的装配（共 {len(fittings)} 套）")
         sys.exit(1)

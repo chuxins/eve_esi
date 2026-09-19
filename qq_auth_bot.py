@@ -27,8 +27,8 @@ from auth import OAuthError, build_authorization_url, exchange_code, verify
 from esi_client import ESIClient, translate_description
 from eve_push import send_image_message, send_message
 from fittings import (FittingError, FittingScopeError, collect_type_ids,
-                      fetch_fittings, format_detail, format_list,
-                      resolve_fitting)
+                      fetch_fittings, format_candidates, format_detail,
+                      format_list, resolve_fitting)
 from main import get_access_token, get_db, load_config
 from market_price import (MAX_BATCH_ITEMS, PRICE_CACHE_TTL, format_batch_message,
                           format_price_message, get_price_table,
@@ -156,7 +156,7 @@ def _on_menu(user_id):
         "• 「余额」不带角色名时会列出全部角色",
         "• 「查价」可带数量：查价 三钛合金*1000 → 同时给出总价",
         "• 「查价」名称支持模糊：查价 三钛 → 自动匹配到 三钛合金",
-        "• 「装配」查角色已保存的装配：装配 chuxins1 [序号/关键词]",
+        "• 「装配」查角色已保存的装配：装配 chuxins1 [序号/舰船名]",
         "• 多项查价：批量查价（每行一个 物品名称*数量，输出三项总计）",
         "• 「查价」物品名支持中文或英文（如：三钛合金 / Tritanium）",
     ]
@@ -349,8 +349,8 @@ def _on_fittings(user_id, text):
     if not arg:
         try:
             send_message(
-                "请使用格式：装配 <角色名> [序号或名称关键词]\n"
-                "如：装配 chuxins1 ｜ 装配 chuxins1 3 ｜ 装配 chuxins1 联盟标配",
+                "请使用格式：装配 <角色名> [序号或舰船名]\n"
+                "如：装配 chuxins1 ｜ 装配 chuxins1 3 ｜ 装配 chuxins1 狂暴（按舰船名）",
                 target_user=user_id,
             )
         except Exception as exc:
@@ -424,14 +424,11 @@ def _on_fittings(user_id, text):
     if not selector:
         message = format_list(fittings, cname, names)
     else:
-        fitting, candidates = resolve_fitting(fittings, selector)
+        fitting, candidates, mode = resolve_fitting(fittings, selector, names)
         if fitting is not None:
             message = format_detail(fitting, names, get_price_table())
         elif candidates:
-            lines = [f"🔍 匹配到 {len(candidates)} 套，请用序号或更完整的名称：", "────────────────"]
-            for i, item in enumerate(candidates[:10], start=1):
-                lines.append(f"{i}. {item.get('name')}")
-            message = "\n".join(lines)
+            message = format_candidates(fittings, candidates, names, mode)
         else:
             message = f"未找到匹配「{selector}」的装配（{cname} 共 {len(fittings)} 套）"
 

@@ -188,7 +188,7 @@ python constellation_kills.py --check
 余额 <角色名>     查询角色 ISK 余额（如：余额 chuxins1）
 余额             列出所有可用角色
 流水 <角色名>     查询该角色最近 10 条钱包流水（如：流水 chuxins1）
-装配 <角色名>     列出该角色已保存的装配方案（可跟序号或名称关键词看详情，如：装配 chuxins1 3）
+装配 <角色名>     列出该角色已保存的装配方案（可跟序号或舰船名看详情，如：装配 chuxins1 狂暴）
 图表 <角色名>     生成并推送该角色余额图表
 查价 <物品名称>*数量  查询该物品 Jita 收购/出售/中间价并推送走势图（名称支持模糊，数量可省，如：查价 三钛*1000）
 批量查价 <物品名称>*数量  每行一个物品，输出所有物品的 Jita 4-4 总收购价/总出售价/总中间价（只有一行时等同「查价」）
@@ -293,7 +293,7 @@ python3 market_price.py --refresh-prices   # 手动刷新参考价缓存
 ```bash
 python3 fittings.py chuxins1            # 列出该角色全部装配
 python3 fittings.py chuxins1 3          # 查看第 3 套详情
-python3 fittings.py chuxins1 联盟标配     # 按名称关键词查看
+python3 fittings.py chuxins1 狂暴         # 按舰船名查看（列出狂暴级的所有装配）
 ```
 
 **重要限制：ESI 只能读取「个人保存的装配」，「军团共享装配」没有任何接口能获取。**
