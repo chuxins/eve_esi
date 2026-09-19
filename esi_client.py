@@ -262,6 +262,13 @@ class ESIClient:
         params = {"language": language} if language else None
         return self._post("/v1/universe/ids/", list(names), params=params)
 
+    def get_character_fittings(self, character_id):
+        """获取角色已保存的装配方案（需 esi-fittings.read_fittings.v1）。
+
+        注意：ESI 只提供角色个人装配，军团共享装配没有接口。
+        """
+        return self._get(f"/v2/characters/{int(character_id)}/fittings/") or []
+
     # ------------------------------------------------------------ 市场行情（公开端点）
 
     def get_region_orders(self, region_id, type_id, order_type=None, max_pages=5):

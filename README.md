@@ -188,6 +188,7 @@ python constellation_kills.py --check
 余额 <角色名>     查询角色 ISK 余额（如：余额 chuxins1）
 余额             列出所有可用角色
 流水 <角色名>     查询该角色最近 10 条钱包流水（如：流水 chuxins1）
+装配 <角色名>     列出该角色已保存的装配方案（可跟序号或名称关键词看详情，如：装配 chuxins1 3）
 图表 <角色名>     生成并推送该角色余额图表
 查价 <物品名称>*数量  查询该物品 Jita 收购/出售/中间价并推送走势图（名称支持模糊，数量可省，如：查价 三钛*1000）
 批量查价 <物品名称>*数量  每行一个物品，输出所有物品的 Jita 4-4 总收购价/总出售价/总中间价（只有一行时等同「查价」）
@@ -255,6 +256,7 @@ pkill -f qq_bot.py                            # 停止
 | `db.py` | MySQL 数据库访问层（角色 / token / 流水 / 余额）|
 | `esi_client.py` | ESI API 客户端（余额 / journal 查询与统计 / 市场行情）|
 | `market_price.py` | Jita 行情查询（名称解析 / 收购价-出售价-中间价 / 走势图）|
+| `fittings.py` | 角色装配方案查询（ESI fittings，槽位分组 + 参考估价）|
 | `build_item_index.py` | 从官方 SDE 构建本地物品名索引（供模糊查询）|
 | `charts.py` | matplotlib 中文字体等公共辅助 |
 | `schema.sql` | 数据库表结构（程序启动时自动初始化）|
@@ -283,6 +285,26 @@ python3 market_price.py --refresh-prices   # 手动刷新参考价缓存
 
 缓存写在 `market_prices.json`（已 gitignore）；`qq_auth_bot.py` 有后台线程每小时检查、
 超过 24 小时自动刷新，指令本身始终秒回。
+
+## 角色装配查询（`装配` 指令）
+
+需要额外授权 `esi-fittings.read_fittings.v1`（已在 `config.example.json` 中列出）。
+
+```bash
+python3 fittings.py chuxins1            # 列出该角色全部装配
+python3 fittings.py chuxins1 3          # 查看第 3 套详情
+python3 fittings.py chuxins1 联盟标配     # 按名称关键词查看
+```
+
+**重要限制：ESI 只能读取「个人保存的装配」，「军团共享装配」没有任何接口能获取。**
+2026-09-20 实测：游戏内「我的装配」34 套 = 接口返回 34 套，而「军团装配」474 套完全不在返回中；
+第三方工具同样依赖 ESI，客户端也不在本地落地这些数据。
+想把军团装配纳入查询，只能在游戏内先**「复制到我的装配」**，之后它就会出现在个人装配列表里。
+
+物品名解析全部走本地 `item_types` 索引（约 1.95 万条），不产生额外请求；详情末尾的
+「参考估价」用已缓存的 ESI 全局均价计算，同样不发起请求（仅作参考，非 Jita 实盘价）。
+
+> 给角色新增 scope 后重新授权**可能不生效**（详见下面的授权说明）。
 
 ## 安全提示
 

@@ -26,11 +26,14 @@ from urllib.parse import parse_qs, quote, urlparse
 from auth import OAuthError, build_authorization_url, exchange_code, verify
 from esi_client import ESIClient, translate_description
 from eve_push import send_image_message, send_message
+from fittings import (FittingError, FittingScopeError, collect_type_ids,
+                      fetch_fittings, format_detail, format_list,
+                      resolve_fitting)
 from main import get_access_token, get_db, load_config
 from market_price import (MAX_BATCH_ITEMS, PRICE_CACHE_TTL, format_batch_message,
-                          format_price_message, parse_batch_query,
-                          parse_item_query, price_cache_age, query_batch,
-                          query_item, refresh_price_cache)
+                          format_price_message, get_price_table,
+                          parse_batch_query, parse_item_query, price_cache_age,
+                          query_batch, query_item, refresh_price_cache)
 from plot_balance import plot_balance
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -126,6 +129,8 @@ def handle_event(event):
         _on_balance(user_id, text)
     elif _is_command(text, "流水"):
         _on_journal(user_id, text)
+    elif _is_command(text, "装配"):
+        _on_fittings(user_id, text)
     elif _is_command(text, "图表"):
         _on_chart(user_id, text)
     elif _is_command(text, "菜单"):
@@ -139,7 +144,9 @@ def _on_menu(user_id):
         "────────────────",
         "余额 <角色名>  查询当前 ISK 余额",
         "流水 <角色名>  查询最近 10 条钱包流水",
+        "装配 <角色名>  查询该角色已保存的装配方案",
         "查价 <物品名>  查询 Jita 行情并推送走势图",
+        "批量查价       每行一个物品，输出三项总计",
         "图表 <角色名>  生成并推送余额图表",
         "账号列表       列出所有已授权角色",
         "添加账号       获取 EVE 账号授权链接",
@@ -149,6 +156,7 @@ def _on_menu(user_id):
         "• 「余额」不带角色名时会列出全部角色",
         "• 「查价」可带数量：查价 三钛合金*1000 → 同时给出总价",
         "• 「查价」名称支持模糊：查价 三钛 → 自动匹配到 三钛合金",
+        "• 「装配」查角色已保存的装配：装配 chuxins1 [序号/关键词]",
         "• 多项查价：批量查价（每行一个 物品名称*数量，输出三项总计）",
         "• 「查价」物品名支持中文或英文（如：三钛合金 / Tritanium）",
     ]
@@ -330,6 +338,108 @@ def _on_journal(user_id, text):
         print(f"[{_now()}] 已发送 {character['character_name']} 最新流水给 {user_id}")
     except Exception as exc:
         print(f"[{_now()}] 发送流水失败: {exc}")
+
+
+def _on_fittings(user_id, text):
+    """处理「装配 <角色名> [序号|关键词]」指令：查看角色已保存的装配方案。
+
+    注意：ESI 只能读取**个人**装配；军团共享装配无接口，无法获取。
+    """
+    arg = _strip_arg(text[len("装配"):])
+    if not arg:
+        try:
+            send_message(
+                "请使用格式：装配 <角色名> [序号或名称关键词]\n"
+                "如：装配 chuxins1 ｜ 装配 chuxins1 3 ｜ 装配 chuxins1 联盟标配",
+                target_user=user_id,
+            )
+        except Exception as exc:
+            print(f"[{_now()}] 发送装配格式提示失败: {exc}")
+        return
+
+    parts = arg.split(maxsplit=1)
+    char_arg = parts[0]
+    selector = parts[1].strip() if len(parts) > 1 else None
+
+    config = load_config()
+    db = get_db(config)
+    matched = [
+        c for c in db.list_characters()
+        if str(c["character_id"]) == char_arg or c["character_name"] == char_arg
+    ]
+    if not matched:
+        try:
+            send_message(
+                f"未找到角色「{char_arg}」。发送「余额」可查看已授权角色列表。",
+                target_user=user_id,
+            )
+        except Exception as exc:
+            print(f"[{_now()}] 发送未找到角色失败: {exc}")
+        return
+
+    character = matched[0]
+    cid = character["character_id"]
+    cname = character["character_name"]
+
+    try:
+        fittings = fetch_fittings(db, config, cid)
+    except FittingScopeError:
+        try:
+            send_message(
+                f"🔒 {cname} 尚未授予装配权限。\n"
+                "请发送「添加账号」重新授权该角色；\n"
+                "若授权后仍提示此项，请先在 EVE 账号设置里撤销本应用的授权，再重新授权。",
+                target_user=user_id,
+            )
+        except Exception as exc:
+            print(f"[{_now()}] 发送装配权限提示失败: {exc}")
+        return
+    except FittingError as exc:
+        try:
+            send_message(f"❌ 查询 {cname} 装配失败：{exc}", target_user=user_id)
+        except Exception as send_exc:
+            print(f"[{_now()}] 发送装配失败提示失败: {send_exc}")
+        return
+    except Exception as exc:
+        print(f"[{_now()}] 查询 {cname} 装配出错: {exc}")
+        try:
+            send_message(f"❌ 查询 {cname} 装配出错：{exc}", target_user=user_id)
+        except Exception as send_exc:
+            print(f"[{_now()}] 发送装配出错提示失败: {send_exc}")
+        return
+
+    if not fittings:
+        try:
+            send_message(
+                f"🛠 {cname} 没有保存过装配方案。\n"
+                "（ESI 仅能读取个人装配，军团共享装配无法获取）",
+                target_user=user_id,
+            )
+        except Exception as exc:
+            print(f"[{_now()}] 发送无装配提示失败: {exc}")
+        return
+
+    names = db.get_item_type_names(collect_type_ids(fittings))
+
+    if not selector:
+        message = format_list(fittings, cname, names)
+    else:
+        fitting, candidates = resolve_fitting(fittings, selector)
+        if fitting is not None:
+            message = format_detail(fitting, names, get_price_table())
+        elif candidates:
+            lines = [f"🔍 匹配到 {len(candidates)} 套，请用序号或更完整的名称：", "────────────────"]
+            for i, item in enumerate(candidates[:10], start=1):
+                lines.append(f"{i}. {item.get('name')}")
+            message = "\n".join(lines)
+        else:
+            message = f"未找到匹配「{selector}」的装配（{cname} 共 {len(fittings)} 套）"
+
+    try:
+        send_message(message, target_user=user_id)
+        print(f"[{_now()}] 已发送 {cname} 装配信息给 {user_id}")
+    except Exception as exc:
+        print(f"[{_now()}] 发送装配信息失败: {exc}")
 
 
 def _on_price(user_id, text):

@@ -232,6 +232,11 @@ def price_cache_age():
     return time.time() - _price_mem["ts"] if _price_mem["ts"] else None
 
 
+def get_price_table():
+    """返回 {type_id: 全局参考均价}（磁盘/内存缓存，只读，不触发刷新）。"""
+    return _load_price_table()
+
+
 def refresh_price_cache(client=None, user_agent=DEFAULT_UA, quiet=False):
     """下载 ESI 全局参考价并写入缓存（磁盘 + 内存），返回缓存条目数。"""
     if client is None:
