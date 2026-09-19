@@ -346,7 +346,8 @@ def _on_journal(user_id, text):
 # 记录每个用户最近一次「装配」列表，便于直接用序号查看详情
 _fitting_context = {}
 _fitting_lock = threading.Lock()
-FITTING_CONTEXT_TTL = 600  # 秒
+FITTING_CONTEXT_TTL = 30  # 秒：列出列表后，可用序号看详情的有效窗口
+FITTING_HINT_TTL = 60     # 秒：超过此时长就算再输序号也完全静默，不打扰
 
 
 def _reply(user_id, message):
@@ -371,24 +372,35 @@ def _remember_fittings(user_id, character, fittings):
         }
 
 
-def _load_fittings_context(user_id):
-    """取出未过期的装配列表上下文；无则返回 None。"""
+def _get_fittings_context(user_id):
+    """返回 (上下文, 已过秒数)；从未列过表时返回 (None, None)。"""
     with _fitting_lock:
         context = _fitting_context.get(user_id)
-    if not context or time.time() - context["ts"] > FITTING_CONTEXT_TTL:
-        return None
-    return context
+    if not context:
+        return None, None
+    return context, time.time() - context["ts"]
 
 
 def _on_fitting_index(user_id, index_text, quiet=False):
     """按序号查看上次列出的装配详情（无需再带角色名）。
 
-    quiet=True 时（纯数字消息、且无上下文）不作任何回复。
+    时间策略：
+    - ≤ FITTING_CONTEXT_TTL（30s）：正常打开详情
+    - 30~60s：上下文已过期，不响应详情但提示重新发送指令
+    - > FITTING_HINT_TTL（60s）：完全静默
+    - 从未列过表：quiet（纯数字消息）静默；显式「装配 <序号>」给出提示
     """
-    context = _load_fittings_context(user_id)
-    if not context:
+    context, age = _get_fittings_context(user_id)
+    if context is None:
         if not quiet:
             _reply(user_id, "请先发送「装配 <角色名>」查看装配列表，再用序号查看详情。")
+        return
+    if age > FITTING_HINT_TTL:
+        return  # 超过提示窗口：不响应也不提示
+    if age > FITTING_CONTEXT_TTL:
+        _reply(user_id,
+               f"⌛ 装配列表已过期（超过 {FITTING_CONTEXT_TTL} 秒），"
+               "请重新发送「装配 <角色名>」后再输入序号。")
         return
 
     fittings = context["fittings"]
@@ -494,14 +506,15 @@ def _on_fittings(user_id, text):
     names = db.get_item_type_names(collect_type_ids(fittings))
 
     if not selector:
-        message = format_list(fittings, cname, names)
+        message = format_list(fittings, cname, names, index_ttl=FITTING_CONTEXT_TTL)
         _remember_fittings(user_id, character, fittings)
     else:
         fitting, candidates, mode = resolve_fitting(fittings, selector, names)
         if fitting is not None:
             message = format_detail(fitting, names, get_price_table())
         elif candidates:
-            message = format_candidates(fittings, candidates, names, mode)
+            message = format_candidates(fittings, candidates, names, mode,
+                                        index_ttl=FITTING_CONTEXT_TTL)
             _remember_fittings(user_id, character, fittings)
         else:
             message = f"未找到匹配「{selector}」的装配（{cname} 共 {len(fittings)} 套）"
