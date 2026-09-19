@@ -3,7 +3,8 @@
   "client_secret": "在此填写 Secret Key",
   "callback_url": "http://YOUR_HOST:8000/callback/",
   "scopes": [
-    "esi-wallet.read_character_wallet.v1"
+    "esi-wallet.read_character_wallet.v1",
+    "esi-fittings.read_fittings.v1"
   ],
   "user_agent": "eve-wallet-tracker/1.0 (your-contact@example.com)",
   "journal_limit": 50,
