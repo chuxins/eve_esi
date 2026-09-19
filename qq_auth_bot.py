@@ -386,26 +386,13 @@ def _get_fittings_context(user_id):
     return context, time.time() - context["ts"]
 
 
-def _consume_expiry_silence(user_id):
-    """超过提示窗口时的静默处理：首次返回 True（应静默），之后返回 False（照常生效）。
-
-    这样既能做到「过期后不主动提示」，又不会让用户陷入「怎么输入都没反应」。
-    """
-    with _fitting_lock:
-        context = _fitting_context.get(user_id)
-        if not context or context.get("silenced"):
-            return False
-        context["silenced"] = True
-        return True
-
-
 def _on_fitting_index(user_id, index_text, quiet=False):
     """按序号查看上次列出的装配详情（无需再带角色名）。
 
     时间策略：
     - ≤ FITTING_CONTEXT_TTL（30s）：正常打开详情
     - 30~60s：上下文已过期，不响应详情但提示重新发送指令
-    - > FITTING_HINT_TTL（60s）：首次静默不响应也不提示；**再次输入序号则照常生效**
+    - > FITTING_HINT_TTL（60s）：不再提示，**直接按序号打开详情**
     - 从未列过表：quiet（纯数字消息）静默；显式「装配 <序号>」给出提示
     """
     context, age = _get_fittings_context(user_id)
@@ -413,9 +400,7 @@ def _on_fitting_index(user_id, index_text, quiet=False):
         if not quiet:
             _reply(user_id, "请先发送「装配 <角色名>」查看装配列表，再用序号查看详情。")
         return
-    if age > FITTING_HINT_TTL and _consume_expiry_silence(user_id):
-        return  # 超过提示窗口的第一次输入：静默忽略（不再提示）
-    if age > FITTING_CONTEXT_TTL and age <= FITTING_HINT_TTL:
+    if FITTING_CONTEXT_TTL < age <= FITTING_HINT_TTL:
         _reply(user_id,
                f"⌛ 装配列表已过期（超过 {FITTING_CONTEXT_TTL} 秒），"
                "请重新发送「装配 <角色名>」后再输入序号。")
@@ -533,15 +518,14 @@ def _on_fittings(user_id, text):
     names = db.get_item_type_names(collect_type_ids(fittings))
 
     if not selector:
-        message = format_list(fittings, cname, names, index_ttl=FITTING_CONTEXT_TTL)
+        message = format_list(fittings, cname, names)
         _remember_fittings(user_id, character, fittings)
     else:
         fitting, candidates, mode = resolve_fitting(fittings, selector, names)
         if fitting is not None:
             message = format_detail(fitting, names, get_price_table())
         elif candidates:
-            message = format_candidates(fittings, candidates, names, mode,
-                                        index_ttl=FITTING_CONTEXT_TTL)
+            message = format_candidates(fittings, candidates, names, mode)
             index_of = {id(f): i for i, f in enumerate(fittings)}
             _remember_fittings(
                 user_id, character, fittings,
