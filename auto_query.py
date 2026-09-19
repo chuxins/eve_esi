@@ -243,14 +243,18 @@ def query_once(config, db):
             balance = client.get_wallet_balance(cid)
             db.record_balance(cid, balance)
 
-            # 增量流水：全量翻页同步（按 ref_id 去重，不遗漏历史）
-            entries = client.sync_wallet_journal(cid, max_pages=20)
+            # 增量流水：只向 ESI 索取比本地最大 ref_id 更新的记录
+            # （首次同步 last_ref_id 为 None 时才全量翻页抓取历史）
+            last_ref_id = db.get_max_journal_ref_id(cid)
+            entries = client.sync_wallet_journal(
+                cid, since_ref_id=last_ref_id, max_pages=20
+            )
             if entries:
                 db.upsert_journal(cid, entries)
 
             print(
                 f"[{now_str()}] {c['character_name']} (ID:{cid}): "
-                f"余额 {balance:,.2f} ISK，本次同步流水 {len(entries)} 条"
+                f"余额 {balance:,.2f} ISK，本次新增流水 {len(entries)} 条"
             )
         except Exception as exc:  # 单角色失败不影响其它角色
             print(f"[{now_str()}] 查询 {c['character_name']} 失败: {exc}")

@@ -126,8 +126,12 @@ def format_message(entry, balance, character, db=None):
     desc_cn = translate_description(entry.get("description"))
     date_raw = entry.get("date") or ""
     try:
-        dt = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
-        date_cn = dt.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        dt = datetime.fromisoformat(str(date_raw).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            # 数据库中的时间已统一存为北京时间（UTC+8）
+            date_cn = dt.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            date_cn = dt.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
     except ValueError:
         date_cn = str(date_raw)[:19]
 

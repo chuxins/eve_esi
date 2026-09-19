@@ -119,22 +119,40 @@ class ESIError(RuntimeError):
 
 
 class ESIClient:
-    def __init__(self, access_token, user_agent):
+    def __init__(self, access_token=None, user_agent="eve-wallet-tracker/1.0"):
+        """access_token 为 None 时只访问公开端点（不带 Authorization 头）。"""
         self.access_token = access_token
         self.user_agent = user_agent
 
     def _headers(self):
-        return {
-            "Authorization": f"Bearer {self.access_token}",
+        headers = {
             "User-Agent": self.user_agent,
             "Accept": "application/json",
         }
+        if self.access_token:
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        return headers
 
-    def _get(self, path, params=None, allow_404=False):
+    def _get_response(self, path, params=None, allow_404=False):
+        """发起请求并返回响应对象（allow_404=True 且命中 404 时返回 None）。"""
         url = f"{ESI_BASE}{path}"
         resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
         if resp.status_code == 404 and allow_404:
             return None
+        if resp.status_code != 200:
+            raise ESIError(f"ESI 请求失败：{url} -> HTTP {resp.status_code} - {resp.text[:200]}")
+        return resp
+
+    def _get(self, path, params=None, allow_404=False):
+        resp = self._get_response(path, params=params, allow_404=allow_404)
+        return None if resp is None else resp.json()
+
+    def _post(self, path, payload, params=None):
+        """发起 POST 请求（用于 /v1/universe/ids/ 等端点）。"""
+        url = f"{ESI_BASE}{path}"
+        resp = requests.post(
+            url, headers=self._headers(), params=params, json=payload, timeout=30
+        )
         if resp.status_code != 200:
             raise ESIError(f"ESI 请求失败：{url} -> HTTP {resp.status_code} - {resp.text[:200]}")
         return resp.json()
@@ -170,28 +188,53 @@ class ESIClient:
                 break
         return entries[:limit]
 
-    def sync_wallet_journal(self, character_id, max_pages=20):
-        """全量增量同步钱包流水。
+    def sync_wallet_journal(self, character_id, since_ref_id=None, max_pages=20):
+        """增量同步钱包流水，返回 ref_id 大于 since_ref_id 的条目（时间倒序）。
 
-        从最新一页开始持续翻页直到返回空（或达到 max_pages），
-        返回所有条目（含历史），由调用方按 ref_id 去重入库。
-        相比只取最新 N 条，能确保不漏任何历史记录。
+        - ``since_ref_id`` 为 None：全量拉取（首次同步），最多 max_pages 页；
+        - 否则从第 1 页开始，只要该页出现已入库的流水就停止翻页，
+          正常情况（只有少量新流水）只需 1 个请求；
+        - 用响应的 ``X-Pages`` 头判断末页，避免用“翻到 404”探测而多一个请求
+          并消耗 ESI 错误配额。
 
-        max_pages 上限防止异常数据导致无限翻页（每页约 1000 条）。
+        返回的是 ESI 原始条目列表（已按 ref_id 过滤），由调用方入库去重。
         """
-        all_entries = []
+        collected = []
         page = 1
+        total_pages = None
+        threshold = None if since_ref_id is None else int(since_ref_id)
+
         while page <= max_pages:
-            batch = self._get(
+            resp = self._get_response(
                 f"/v4/characters/{character_id}/wallet/journal/",
                 params={"page": page},
-                allow_404=True,  # 页不存在(404)表示已无更多数据
+                allow_404=True,  # 兼容部分时刻 X-Pages 缺失的极端情况
             )
+            if resp is None:
+                break
+            if total_pages is None:
+                try:
+                    total_pages = max(1, int(resp.headers.get("X-Pages") or 1))
+                except (TypeError, ValueError):
+                    total_pages = 1
+            batch = resp.json() or []
             if not batch:
                 break
-            all_entries.extend(batch)
+            if threshold is None:
+                collected.extend(batch)
+            else:
+                fresh = [
+                    e for e in batch
+                    if int(e.get("id") or e.get("ref_id") or 0) > threshold
+                ]
+                collected.extend(fresh)
+                if len(fresh) < len(batch):
+                    break  # 本页已含历史流水，后续页只会更旧
+            if page >= total_pages:
+                break
             page += 1
-        return all_entries
+
+        return collected
 
     # ------------------------------------------------------------ 市场交易
 
@@ -213,6 +256,52 @@ class ESIClient:
             f"/v3/universe/types/{int(type_id)}/",
             params={"language": "zh"},
         )
+
+    def resolve_names(self, names, language=None):
+        """名称 → ID（POST /v1/universe/ids/）；language 可选 zh/en。"""
+        params = {"language": language} if language else None
+        return self._post("/v1/universe/ids/", list(names), params=params)
+
+    # ------------------------------------------------------------ 市场行情（公开端点）
+
+    def get_region_orders(self, region_id, type_id, order_type=None, max_pages=5):
+        """获取星域内某物品的挂单（默认买/卖一并返回）。
+
+        用响应头 X-Pages 判断末页；max_pages 上限防止异常数据导致翻页过多。
+        """
+        orders = []
+        page = 1
+        while page <= max_pages:
+            params = {"type_id": int(type_id), "page": page}
+            if order_type:
+                params["order_type"] = order_type
+            resp = self._get_response(
+                f"/v1/markets/{int(region_id)}/orders/", params=params
+            )
+            orders.extend(resp.json() or [])
+            try:
+                total_pages = max(1, int(resp.headers.get("X-Pages") or 1))
+            except (TypeError, ValueError):
+                total_pages = 1
+            if page >= total_pages:
+                break
+            page += 1
+        return orders
+
+    def get_region_history(self, region_id, type_id):
+        """获取星域内某物品的历史日线（均价/最高/最低/成交量）。"""
+        return self._get(
+            f"/v1/markets/{int(region_id)}/history/",
+            params={"type_id": int(type_id)},
+        ) or []
+
+    def get_market_prices(self):
+        """获取全局参考价列表（/v1/markets/prices/，每日更新）。
+
+        返回 [{type_id, adjusted_price, average_price}, ...]。
+        PLEX 这类没有星域挂单的物品只能从这里取到参考价。
+        """
+        return self._get("/v1/markets/prices/") or []
 
     # ------------------------------------------------------------ 汇总统计
 

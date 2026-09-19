@@ -1,6 +1,7 @@
 -- EVE ESI 持久化数据库表结构
 -- 用法: mysql -u eve_esi -p eve_esi < schema.sql
 -- 或通过程序自动初始化 (main.py --init-db)
+-- 时区：所有时间列统一存 UTC+8（北京时间）的裸时间
 
 -- 角色表
 CREATE TABLE IF NOT EXISTS characters (
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS wallet_journal (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     character_id BIGINT NOT NULL,
     ref_id BIGINT NOT NULL COMMENT 'ESI journal ref_id',
-    journal_date DATETIME NULL,
+    journal_date DATETIME NULL COMMENT 'UTC+8 北京时间',
     amount DECIMAL(20,2) NULL,
     balance DECIMAL(20,2) NULL,
     description VARCHAR(512) NULL,
@@ -51,16 +52,18 @@ CREATE TABLE IF NOT EXISTS wallet_balance (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     character_id BIGINT NOT NULL,
     balance DECIMAL(20,2) NOT NULL,
-    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC+8 北京时间',
     KEY idx_char_time (character_id, recorded_at),
     CONSTRAINT fk_balance_char FOREIGN KEY (character_id)
         REFERENCES characters(character_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- EVE 物品类型表（type_id -> 名称，用于交易详情翻译）
+-- EVE 物品类型表（type_id -> 名称，用于交易详情翻译与「查价」模糊匹配）
 CREATE TABLE IF NOT EXISTS item_types (
     type_id BIGINT PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
+    name_en VARCHAR(255) NULL COMMENT '英文名（SDE），供模糊查询',
+    name_norm VARCHAR(512) NULL COMMENT '规范化搜索键 |中文|英文|',
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -73,7 +76,7 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
     type_id BIGINT NULL,
     location_id BIGINT NULL,
     client_id BIGINT NULL,
-    date DATETIME NULL,
+    date DATETIME NULL COMMENT 'UTC+8 北京时间',
     is_buy TINYINT(1) NULL,
     is_personal TINYINT(1) NULL,
     quantity BIGINT NULL,

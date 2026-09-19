@@ -60,8 +60,23 @@ def load_config():
     return config
 
 
+_DB_CACHE = {}
+
+
 def get_db(config):
-    return Database(config["db"])
+    """获取 Database 实例（按连接目标缓存，避免重复建连与建表检查）。"""
+    db_cfg = config["db"]
+    key = (
+        str(db_cfg.get("host", "127.0.0.1")),
+        int(db_cfg.get("port", 3306)),
+        str(db_cfg.get("user", "eve_esi")),
+        str(db_cfg.get("database", "eve_esi")),
+    )
+    db = _DB_CACHE.get(key)
+    if db is None:
+        db = Database(db_cfg)
+        _DB_CACHE[key] = db
+    return db
 
 
 # ---------------------------------------------------------------- 授权与 token
