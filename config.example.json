@@ -14,5 +14,16 @@
     "user": "eve_esi",
     "password": "在此填写数据库密码",
     "database": "eve_esi"
+  },
+  "kill_monitor": {
+    "enabled": true,
+    "min_isk": 1000000000,
+    "interval_seconds": 600,
+    "lookback_hours": 24,
+    "push_backfill": false,
+    "max_push_per_cycle": 30,
+    "request_interval_seconds": 1.0,
+    "target_user": null,
+    "target_group": null
   }
 }

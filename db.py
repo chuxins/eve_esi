@@ -654,3 +654,159 @@ class Database:
                     (character_id, int(limit)),
                 )
                 return cur.fetchall()
+
+    # ------------------------------------------------------------ 全宇宙 km 监控
+
+    def insert_killmails(self, rows):
+        """批量写入 km（killmail_id 已存在则忽略），返回**新增**的行数。"""
+        if not rows:
+            return 0
+        sql = (
+            "INSERT IGNORE INTO universe_killmails "
+            "(killmail_id, killmail_time, solar_system_id, region_id, "
+            " victim_character_id, victim_corporation_id, victim_alliance_id, "
+            " ship_type_id, attacker_count, isk_value, dropped_value, zkb_hash) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+        )
+        conn = self._conn()
+        affected = 0
+        with conn.cursor() as cur:
+            conn.begin()
+            try:
+                for start in range(0, len(rows), self._BATCH_SIZE):
+                    cur.executemany(sql, rows[start:start + self._BATCH_SIZE])
+                    affected += max(cur.rowcount, 0)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return affected
+
+    def pending_high_value_kills(self, min_isk, limit=30, since=None):
+        """待推送（pushed_at IS NULL）且估价 ≥ min_isk 的 km，按时间升序返回。
+
+        since（北京时间字符串）非空时只返回 killmail_time ≥ since 的 km，
+        用于限定「初始数据起点」（初始化之前的历史不推送）。
+        """
+        sql = (
+            "SELECT * FROM universe_killmails "
+            "WHERE pushed_at IS NULL AND isk_value >= %s"
+        )
+        params = [float(min_isk)]
+        if since:
+            sql += " AND killmail_time >= %s"
+            params.append(since)
+        sql += " ORDER BY killmail_time ASC, killmail_id ASC LIMIT %s"
+        params.append(int(limit))
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchall()
+
+    def mark_old_killmails_pushed(self, before_time, min_isk=None):
+        """把早于 before_time 的 km 标记为已处理（初始化时限定起点用）。"""
+        sql = "UPDATE universe_killmails SET pushed_at=NOW() WHERE pushed_at IS NULL AND killmail_time < %s"
+        params = [before_time]
+        if min_isk is not None:
+            sql += " AND isk_value >= %s"
+            params.append(float(min_isk))
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.rowcount
+
+    def delete_killmails_before(self, before_time):
+        """删除早于 before_time 的 km（清理初次采到的远古数据），返回删除行数。"""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM universe_killmails WHERE killmail_time < %s",
+                            (before_time,))
+                return cur.rowcount
+
+    def mark_killmails_pushed(self, killmail_ids):
+        """把指定 km 标记为已推送，返回受影响行数。"""
+        ids = [int(x) for x in killmail_ids if x]
+        if not ids:
+            return 0
+        placeholders = ",".join(["%s"] * len(ids))
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE universe_killmails SET pushed_at=NOW() "
+                    f"WHERE killmail_id IN ({placeholders})",
+                    ids,
+                )
+                return cur.rowcount
+
+    def mark_all_pending_pushed(self, min_isk=None):
+        """把待推送的 km 全部标记为已处理（初始化回填「不补推历史」时用）。"""
+        sql = "UPDATE universe_killmails SET pushed_at=NOW() WHERE pushed_at IS NULL"
+        params = ()
+        if min_isk is not None:
+            sql += " AND isk_value >= %s"
+            params = (float(min_isk),)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.rowcount
+
+    def killmail_count(self, since=None):
+        """km 总条数；since（北京时间字符串）非空时只统计该时间之后的。"""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                if since:
+                    cur.execute(
+                        "SELECT COUNT(*) AS n FROM universe_killmails "
+                        "WHERE killmail_time >= %s",
+                        (since,),
+                    )
+                else:
+                    cur.execute("SELECT COUNT(*) AS n FROM universe_killmails")
+                return int(cur.fetchone()["n"])
+
+    def high_value_kill_count(self, min_isk, since=None):
+        """估价 ≥ min_isk 的 km 条数（可按时间过滤）。"""
+        sql = "SELECT COUNT(*) AS n FROM universe_killmails WHERE isk_value >= %s"
+        params = [float(min_isk)]
+        if since:
+            sql += " AND killmail_time >= %s"
+            params.append(since)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return int(cur.fetchone()["n"])
+
+    # ------------------------------------------------------------ ID→名称缓存
+
+    def get_names(self, ids):
+        """返回 {id: name}（只有缓存里已有的 id）。"""
+        ids = [int(x) for x in ids if x]
+        if not ids:
+            return {}
+        placeholders = ",".join(["%s"] * len(ids))
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT id, name FROM universe_names WHERE id IN ({placeholders})",
+                    ids,
+                )
+                return {int(r["id"]): r["name"] for r in cur.fetchall()}
+
+    def upsert_names(self, entries):
+        """写入 ID→名称缓存；entries 为 [(id, name, category), ...]。"""
+        rows = [(int(i), str(n), (c or None)) for i, n, c in entries if i and n]
+        if not rows:
+            return 0
+        sql = (
+            "INSERT INTO universe_names (id, name, category) VALUES (%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE name=VALUES(name), category=VALUES(category)"
+        )
+        return self._executemany(sql, rows)
+
+    def get_missing_name_ids(self, ids):
+        """返回给定 id 中尚未缓存名称的部分（保持去重后的原顺序）。"""
+        ids = [int(x) for x in ids if x]
+        if not ids:
+            return []
+        known = self.get_names(ids)
+        return [i for i in dict.fromkeys(ids) if i not in known]

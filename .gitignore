@@ -11,6 +11,8 @@ config.json
 .report_auth
 push_state.json
 *.log
+kill_monitor_state.json
+kill_monitor_regions.json
 
 # 数据库
 *.db

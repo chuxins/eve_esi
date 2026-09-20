@@ -216,6 +216,73 @@ pkill -f qq_bot.py                            # 停止
 原理：NapCat 通过 OneBot HTTP 上报将 QQ 消息事件 POST 到 `127.0.0.1:8888/onebot/event`，
 `qq_bot.py` 解析命令并从数据库快照/ESI 查询余额，通过 OneBot API 回复。
 
+## 全宇宙高价值 km 监控（`kill_monitor.py`）
+
+监控全宇宙被击毁的舰船，**估价 ≥ 阈值（默认 10 亿 ISK）时自动推送 km 链接**到 QQ。
+
+### 数据源与原理（为什么必须用 zKillboard）
+- ESI 没有「全宇宙 km 流」端点；单条 km 详情需要 hash，而 hash 只能从第三方拿；
+- zKillboard `/api/kills/` **必须带实体过滤**（不带过滤返回
+  `{"error":"Please provide an entity filter first."}`），所以按**星域**轮询 114 个星域：
+  `/api/kills/regionID/{id}/`；
+- 单次最多返回 200 条（`limit` 参数已被官方撤销），返回体即 ESI 格式 km + `zkb` 统计
+  （`totalValue` 估价、`hash`），无需再调 ESI 取详情；
+- **不要用 `pastSeconds`**：实测其索引滞后约 15 分钟（`pastSeconds/1800` 返回 0 条、
+  `pastSeconds/86400` 的最新一条比无窗口查询旧），只有**不带窗口**的「最新 200 条」才新鲜；
+  所以增量轮询一律用无窗口查询，靠 `killmail_id` 去重；
+- zKillboard 有「冷缓存」现象：某星域久未查询时首次请求可能耗时 30～60 秒 →
+  单请求读取超时 45 秒，超时的星域本轮跳过、下轮补上；
+- 官方要求 UA 可联系、频率 ≤ 1 次/秒 → 星域之间默认 sleep 1 秒。
+
+### 运行
+```bash
+supervisorctl status eve-kill-monitor        # 查看状态
+supervisorctl restart eve-kill-monitor       # 改代码后重启
+python3 kill_monitor.py --once --dry-run     # 自测（不写库不推送）
+python3 kill_monitor.py --once --region-limit 3 --dry-run   # 快速自测
+python3 kill_monitor.py --reset              # 重置初始化状态
+```
+
+### 初始化与推送策略
+- **数据起点（cutoff）**：初始化时记录 `cutoff_time = 当前时间 − lookback_hours`（存于
+  `kill_monitor_state.json`），早于该时间的 km 一律丢弃 —— 因为无窗口查询对冷门星域会
+  返回几个月甚至几年前的数据，不过滤会导致误推远古 km；
+- 首次运行先按起点用 `pastSeconds` 拉一遍历史（该窗口数据较旧、且受 200 条上限影响只覆盖部分），
+  紧接着再按无窗口拉一遍最新数据；
+- 默认 `push_backfill=false`：初始化那批历史**只入库、不补推**（避免启动瞬间刷屏）；
+  设为 `true` 则按 `max_push_per_cycle`（默认 30 条/轮）分多轮补推；
+- 之后每 `interval_seconds`（默认 600s）扫一遍全部星域（无窗口，每星域最新 200 条），
+  按 `killmail_id` 去重，进程重启不会重复推送；
+- 日志中「截断星域 N 个」指这些星域返回已达 200 条上限（属正常，表示该星域还有更早的
+  km 未取）；只有单星域在 10 分钟内被击毁 >200 艘时才可能漏单。
+
+### 配置（`config.json` → `kill_monitor`）
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `min_isk` | `1000000000` | 推送阈值（10 亿 ISK），取 zKillboard `totalValue` 估价 |
+| `interval_seconds` | `600` | 扫描周期 |
+| `lookback_hours` | `24` | 初始化回溯小时数 |
+| `push_backfill` | `false` | 初始化历史是否补推 |
+| `max_push_per_cycle` | `30` | 每轮最多推送条数 |
+| `request_interval_seconds` | `1.0` | 星域之间请求间隔（官方要求 ≤1 次/秒）|
+| `target_user` / `target_group` | 取 `push` 段 | 推送目标 |
+
+### 消息示例
+```
+💥 高价值舰船击毁（阈值 10.00 亿 ISK）
+💰 估价：63,885,732,087 ISK（638.86 亿）
+🚀 舰船：飞龙级
+🏴 受击方：Huizel Tsero（Science and Trade Institute）
+📍 星系：HY-RWO（30001159）｜攻击者 68 人
+🕒 2026-09-20 02:08:31
+🔗 https://zkillboard.com/kill/138557102/
+```
+
+### 实测流量参考（2026-09-20）
+- 全宇宙 24 小时约 **1.1 万条** km 入库，其中估价 ≥10 亿的约 **320 条/天**；
+- 单轮扫描 114 个星域约需 **2～5 分钟**；zKillboard 入库本身有约 5～15 分钟延迟，
+  因此从被击毁到收到推送通常在 **10 分钟内**。
+
 ## 数据库表
 
 | 表 | 说明 |
@@ -226,6 +293,8 @@ pkill -f qq_bot.py                            # 停止
 | `wallet_balance` | 钱包余额历史快照 |
 | `wallet_transactions` | 市场交易详情（按角色 + transaction_id 去重）|
 | `item_types` | EVE 物品类型表（type_id -> 名称，用于交易详情翻译）|
+| `universe_killmails` | 全宇宙 km（zKillboard 轮询入库，`pushed_at` 标记是否已推送）|
+| `universe_names` | ID → 名称缓存（星系/角色/军团，供 km 消息展示）|
 
 ## 输出示例
 
@@ -257,6 +326,7 @@ pkill -f qq_bot.py                            # 停止
 | `esi_client.py` | ESI API 客户端（余额 / journal 查询与统计 / 市场行情）|
 | `market_price.py` | Jita 行情查询（名称解析 / 收购价-出售价-中间价 / 走势图）|
 | `fittings.py` | 角色装配方案查询（ESI fittings，槽位分组 + 参考估价）|
+| `kill_monitor.py` | 全宇宙高价值 km 监控（zKillboard 星域轮询 + 阈值推送）|
 | `build_item_index.py` | 从官方 SDE 构建本地物品名索引（供模糊查询）|
 | `charts.py` | matplotlib 中文字体等公共辅助 |
 | `schema.sql` | 数据库表结构（程序启动时自动初始化）|

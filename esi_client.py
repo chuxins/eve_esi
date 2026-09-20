@@ -262,6 +262,20 @@ class ESIClient:
         params = {"language": language} if language else None
         return self._post("/v1/universe/ids/", list(names), params=params)
 
+    def resolve_ids(self, ids):
+        """ID → 名称（POST /latest/universe/names/，公开端点，单次最多 1000 个）。
+
+        返回 [{"id":..., "name":..., "category":...}, ...]，未知 id 不会出现在结果里。
+        """
+        ids = [int(i) for i in ids if i]
+        if not ids:
+            return []
+        return self._post("/latest/universe/names/", ids) or []
+
+    def get_region_ids(self):
+        """全部星域 ID 列表（GET /latest/universe/regions/，公开端点）。"""
+        return [int(r) for r in (self._get("/latest/universe/regions/") or [])]
+
     def get_character_fittings(self, character_id):
         """获取角色已保存的装配方案（需 esi-fittings.read_fittings.v1）。
 

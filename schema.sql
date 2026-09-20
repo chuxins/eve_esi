@@ -89,3 +89,33 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
     CONSTRAINT fk_txn_char FOREIGN KEY (character_id)
         REFERENCES characters(character_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 全宇宙舰船击毁记录（数据源：zKillboard 按星域轮询，仅收录估价达标的会推送）
+CREATE TABLE IF NOT EXISTS universe_killmails (
+    killmail_id BIGINT PRIMARY KEY,
+    killmail_time DATETIME NOT NULL COMMENT 'UTC+8 北京时间',
+    solar_system_id INT NULL,
+    region_id INT NULL,
+    victim_character_id BIGINT NULL,
+    victim_corporation_id BIGINT NULL,
+    victim_alliance_id BIGINT NULL,
+    ship_type_id INT NULL,
+    attacker_count INT NULL,
+    isk_value DECIMAL(20,2) NULL COMMENT 'zKillboard totalValue 估价',
+    dropped_value DECIMAL(20,2) NULL,
+    zkb_hash CHAR(40) NULL,
+    pushed_at DATETIME NULL COMMENT '推送成功时间；NULL=待推送',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_time (killmail_time),
+    KEY idx_pending (pushed_at, isk_value),
+    KEY idx_system_time (solar_system_id, killmail_time),
+    KEY idx_region_time (region_id, killmail_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ID → 名称缓存（星系 / 角色 / 军团，供 km 推送消息展示）
+CREATE TABLE IF NOT EXISTS universe_names (
+    id BIGINT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    category VARCHAR(32) NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
