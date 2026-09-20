@@ -17,7 +17,7 @@
   },
   "kill_monitor": {
     "enabled": true,
-    "min_isk": 1000000000,
+    "min_isk": 1500000000,
     "interval_seconds": 300,
     "lookback_hours": 24,
     "push_backfill": false,

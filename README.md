@@ -218,7 +218,7 @@ pkill -f qq_bot.py                            # 停止
 
 ## 全宇宙高价值 km 监控（`kill_monitor.py`）
 
-监控全宇宙被击毁的舰船，**估价 ≥ 阈值（默认 10 亿 ISK）时自动推送 km 链接**到 QQ。
+监控全宇宙被击毁的舰船，**估价 ≥ 阈值（默认 15 亿 ISK）时自动推送 km 链接**到 QQ。
 
 ### 数据源与原理（为什么必须用 zKillboard）
 - ESI 没有「全宇宙 km 流」端点；单条 km 详情需要 hash，而 hash 只能从第三方拿；
@@ -259,7 +259,7 @@ python3 kill_monitor.py --reset              # 重置初始化状态
 ### 配置（`config.json` → `kill_monitor`）
 | 键 | 默认 | 说明 |
 |----|------|------|
-| `min_isk` | `1000000000` | 推送阈值（10 亿 ISK），取 zKillboard `totalValue` 估价 |
+| `min_isk` | `1500000000` | 推送阈值（15 亿 ISK），取 zKillboard `totalValue` 估价 |
 | `interval_seconds` | `300` | 扫描周期（单轮扫描约 3～5 分钟，不建议低于 300）|
 | `lookback_hours` | `24` | 初始化回溯小时数 |
 | `push_backfill` | `false` | 初始化历史是否补推 |
@@ -269,7 +269,7 @@ python3 kill_monitor.py --reset              # 重置初始化状态
 
 ### 消息示例
 ```
-💥 高价值舰船击毁（阈值 10.00 亿 ISK）
+💥 高价值舰船击毁（阈值 15.00 亿 ISK）
 💰 估价：63,885,732,087 ISK（638.86 亿）
 🚀 舰船：飞龙级
 🏴 受击方：Huizel Tsero（Science and Trade Institute）
@@ -279,7 +279,7 @@ python3 kill_monitor.py --reset              # 重置初始化状态
 ```
 
 ### 实测流量参考（2026-09-20）
-- 全宇宙 24 小时约 **1.1 万条** km 入库，其中估价 ≥10 亿的约 **320 条/天**；
+- 全宇宙 24 小时约 **1.1 万条** km 入库，其中估价 ≥15 亿的约 **230 条/天**（≥10 亿约 320 条/天）；
 - 单轮扫描 114 个星域约需 **2～5 分钟**；zKillboard 入库本身有约 5～15 分钟延迟，
   因此从被击毁到收到推送通常在 **10 分钟内**。
 
