@@ -251,7 +251,7 @@ python3 kill_monitor.py --reset              # 重置初始化状态
   紧接着再按无窗口拉一遍最新数据；
 - 默认 `push_backfill=false`：初始化那批历史**只入库、不补推**（避免启动瞬间刷屏）；
   设为 `true` 则按 `max_push_per_cycle`（默认 30 条/轮）分多轮补推；
-- 之后每 `interval_seconds`（默认 600s）扫一遍全部星域（无窗口，每星域最新 200 条），
+- 之后每 `interval_seconds`（默认 300s）扫一遍全部星域（无窗口，每星域最新 200 条），
   按 `killmail_id` 去重，进程重启不会重复推送；
 - 日志中「截断星域 N 个」指这些星域返回已达 200 条上限（属正常，表示该星域还有更早的
   km 未取）；只有单星域在 10 分钟内被击毁 >200 艘时才可能漏单。
@@ -260,7 +260,7 @@ python3 kill_monitor.py --reset              # 重置初始化状态
 | 键 | 默认 | 说明 |
 |----|------|------|
 | `min_isk` | `1000000000` | 推送阈值（10 亿 ISK），取 zKillboard `totalValue` 估价 |
-| `interval_seconds` | `600` | 扫描周期 |
+| `interval_seconds` | `300` | 扫描周期（单轮扫描约 3～5 分钟，不建议低于 300）|
 | `lookback_hours` | `24` | 初始化回溯小时数 |
 | `push_backfill` | `false` | 初始化历史是否补推 |
 | `max_push_per_cycle` | `30` | 每轮最多推送条数 |
