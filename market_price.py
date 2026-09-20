@@ -60,9 +60,27 @@ def parse_item_query(text):
     - 数量为正整数，允许千分位逗号/下划线（如 1,000），全角 ＊ 等价 *
     - ``*`` 后为空（如「三钛合金*」）时数量按 1 计算
     - 名称两侧的空白与分隔符（：: ，,、等）会被剔除
+    - 兼容多列粘贴（如从市场/装配清单复制来的「物品名*　市场分类*　数量」）：
+      以 ``*`` 切分后取**第 1 列**为物品名、**末列**的纯数字为数量，中间列（分类）丢弃
     - 数量格式非法或缺少名称时抛 ValueError
     """
     text = str(text or "").replace("＊", "*")
+
+    # 多列粘贴：第 1 列为物品名，中间列的「市场分类」等忽略，末列为数量
+    parts = text.split("*")
+    if len(parts) >= 3:
+        name = _clean_item_name(parts[0])
+        if not name:
+            raise ValueError("缺少物品名称")
+        qty_text = parts[-1].strip().replace(",", "").replace("_", "")
+        if not qty_text:
+            return name, 1  # 「物品*分类*」→ 数量按 1 计算
+        if not qty_text.isdigit():
+            return name, None  # 末列不是数量（如多粘贴了备注）→ 只查单价
+        quantity = int(qty_text)
+        if not 1 <= quantity <= MAX_QUANTITY:
+            raise ValueError(f"数量需在 1 ~ {MAX_QUANTITY:,} 之间")
+        return name, quantity
 
     if "*" not in text:
         name = _clean_item_name(text)
@@ -88,6 +106,9 @@ def parse_item_query(text):
 
 def parse_batch_query(text):
     """解析批量查价文本（每行一个「物品名称[*数量]」）。
+
+    单行解析交给 :func:`parse_item_query`，因此同样支持多列粘贴
+    （「物品名*　市场分类*　数量」，中间列会被忽略）。
 
     返回 (items, errors)：
     - items  [(名称, 数量或 None), ...]
