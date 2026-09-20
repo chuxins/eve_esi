@@ -29,6 +29,7 @@ from eve_push import send_image_message, send_message
 from fittings import (FittingError, FittingScopeError, collect_type_ids,
                       eft_footer, fetch_fittings, format_candidates,
                       format_detail, format_eft, format_list, resolve_fitting)
+from kill_monitor import build_kill_line, display_names, fmt_isk, monitor_config
 from main import get_access_token, get_db, load_config
 from market_price import (MAX_BATCH_ITEMS, PRICE_CACHE_TTL, format_batch_message,
                           format_price_message, get_price_table, jita_sell_prices,
@@ -136,6 +137,8 @@ def handle_event(event):
         _on_fittings(user_id, text)
     elif _is_command(text, "图表"):
         _on_chart(user_id, text)
+    elif _is_command(text, "击毁") or text == "击毁查询":
+        _on_kills(user_id, text)
     elif _is_command(text, "菜单"):
         _on_menu(user_id)
 
@@ -151,6 +154,7 @@ def _on_menu(user_id):
         "查价 <物品名>  查询 Jita 行情并推送走势图",
         "批量查价       每行一个物品，输出三项总计",
         "图表 <角色名>  生成并推送余额图表",
+        "击毁 [阈值亿|全部]  最近的 5 条舰船击毁（默认按监控阈值过滤）",
         "账号列表       列出所有已授权角色",
         "添加账号       获取 EVE 账号授权链接",
         "菜单           显示本菜单",
@@ -163,6 +167,7 @@ def _on_menu(user_id):
         "• 「装配」详情为 EFT 格式，可直接导入游戏；加「英文」用英文名",
         "• 多项查价：批量查价（每行一个 物品名称*数量，输出三项总计）",
         "• 「查价」物品名支持中文或英文（如：三钛合金 / Tritanium）",
+        "• 「击毁」默认取监控阈值（config.kill_monitor.min_isk），也可：击毁 5 / 击毁 全部",
     ]
     try:
         chars = get_db(load_config()).list_characters()
@@ -178,6 +183,67 @@ def _on_menu(user_id):
         print(f"[{_now()}] 已发送菜单给 {user_id}")
     except Exception as exc:
         print(f"[{_now()}] 发送菜单失败: {exc}")
+
+
+KILLS_LIMIT = 5  # 「击毁」指令每次展示的条数
+
+
+def _on_kills(user_id, text):
+    """处理「击毁 [阈值亿|全部]」指令：推送最近的 5 条舰船击毁。
+
+    - 不带参数：按 config.json 的 kill_monitor.min_isk 过滤
+    - 带数字（单位亿，如「击毁 5」）：按该阈值过滤
+    - 「击毁 全部」：不限估价
+    数据来自 kill_monitor 落库的 universe_killmails 表，不实时请求第三方。
+    """
+    arg = _strip_arg(text[len("击毁"):])
+    if arg.startswith("查询"):
+        arg = _strip_arg(arg[len("查询"):])
+
+    config = load_config()
+    cfg = monitor_config(config)
+    min_isk = cfg["min_isk"]
+    if arg in ("全部", "不限", "所有", "all", "ALL"):
+        min_isk = None
+    elif arg:
+        try:
+            min_isk = float(arg.replace("亿", "").replace(",", "")) * 1e8
+        except ValueError:
+            try:
+                send_message("格式：击毁 [阈值亿｜全部]\n例：击毁 ｜ 击毁 5 ｜ 击毁 全部",
+                             target_user=user_id)
+            except Exception as exc:
+                print(f"[{_now()}] 发送击毁格式提示失败: {exc}")
+            return
+
+    db = get_db(config)
+    try:
+        rows = db.recent_killmails(min_isk=min_isk, limit=KILLS_LIMIT)
+    except Exception as exc:                     # noqa: BLE001
+        print(f"[{_now()}] 击毁查询数据库失败: {exc}")
+        try:
+            send_message(f"❌ 击毁查询失败：{exc}", target_user=user_id)
+        except Exception as send_exc:
+            print(f"[{_now()}] 发送击毁失败提示失败: {send_exc}")
+        return
+
+    if not rows:
+        try:
+            send_message("暂无记录（监控刚启动，或该阈值内还没有 km）。", target_user=user_id)
+        except Exception as exc:
+            print(f"[{_now()}] 发送击毁空结果失败: {exc}")
+        return
+
+    names = display_names(db, ESIClient(None, cfg["user_agent"]), rows, print)
+    title = ("💥 最近 %d 条击毁" % len(rows)
+             + (f"（估价 ≥ {fmt_isk(min_isk)} ISK）" if min_isk else "（不限估价）"))
+    message = "\n".join([title, "────────────────"]
+                        + [build_kill_line(r, names) for r in rows])
+    try:
+        send_message(message, target_user=user_id)
+        print(f"[{_now()}] 已发送击毁查询（{len(rows)} 条）给 {user_id}")
+    except Exception as exc:
+        print(f"[{_now()}] 发送击毁查询失败: {exc}")
 
 
 def _on_add_account(user_id):

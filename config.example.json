@@ -19,6 +19,7 @@
     "enabled": true,
     "min_isk": 1500000000,
     "interval_seconds": 300,
+    "push_enabled": true,
     "lookback_hours": 24,
     "push_backfill": false,
     "max_push_per_cycle": 30,

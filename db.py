@@ -776,6 +776,20 @@ class Database:
                 cur.execute(sql, params)
                 return int(cur.fetchone()["n"])
 
+    def recent_killmails(self, min_isk=None, limit=5):
+        """最近的 km（min_isk 非空时只取估价达标的），按 km 时间倒序。"""
+        sql = "SELECT * FROM universe_killmails"
+        params = []
+        if min_isk:
+            sql += " WHERE isk_value >= %s"
+            params.append(float(min_isk))
+        sql += " ORDER BY killmail_time DESC, killmail_id DESC LIMIT %s"
+        params.append(int(limit))
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchall()
+
     # ------------------------------------------------------------ ID→名称缓存
 
     def get_names(self, ids):

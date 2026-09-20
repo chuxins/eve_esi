@@ -83,6 +83,10 @@ def now_str():
     return datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
+# 少数不在本地物品表里的常见舰船（如逃生舱），补中文名
+SHIP_NAME_OVERRIDES = {670: "逃生舱"}
+
+
 def fmt_isk(value):
     """把 ISK 数值格式化成「亿 / 万」可读形式。"""
     v = float(value or 0)
@@ -118,6 +122,7 @@ def monitor_config(config):
     return {
         "min_isk": float(m.get("min_isk", DEFAULT_MIN_ISK)),
         "interval_seconds": max(120, interval),
+        "push_enabled": bool(m.get("push_enabled", True)),
         "lookback_hours": float(m.get("lookback_hours", DEFAULT_LOOKBACK_HOURS)),
         "push_backfill": bool(m.get("push_backfill", False)),
         "max_push_per_cycle": max(1, int(m.get("max_push_per_cycle", DEFAULT_MAX_PUSH))),
@@ -324,6 +329,29 @@ def ensure_names(db, client, ids, log):
         return {}
 
 
+def ship_name(ship_id, names):
+    """取舰船展示名：本地覆盖 → 物品表/ESI 名称 → type_id 兜底。"""
+    sid = int(ship_id or 0)
+    if not sid:
+        return "未知舰船"
+    return SHIP_NAME_OVERRIDES.get(sid) or names.get(sid) or f"type_id {sid}"
+
+
+def build_kill_line(row, names):
+    """把一条 km 压缩成两行短文本（供「击毁」指令与汇总消息复用）。"""
+    killmail_id = int(row["killmail_id"])
+    isk = float(row["isk_value"] or 0)
+    ship = ship_name(row["ship_type_id"], names)
+    system_id = int(row["solar_system_id"] or 0)
+    system = names.get(system_id) or str(system_id)
+    victim = names.get(int(row["victim_character_id"] or 0))
+    line = f"{fmt_isk(isk):>8} ｜ {ship} ｜ {system}"
+    if victim:
+        line += f" ｜ {victim}"
+    return (f"{str(row['killmail_time'])[5:16]}  {line}\n"
+            f"🔗 https://zkillboard.com/kill/{killmail_id}/")
+
+
 def build_message(row, names, min_isk):
     """组装单条 km 推送消息。"""
     killmail_id = int(row["killmail_id"])
@@ -376,7 +404,17 @@ def display_names(db, client, rows, log):
 # ---------------------------------------------------------------- 推送
 
 def push_pending(db, client, cfg, log, dry_run=False, since=None):
-    """把待推送的高价值 km 推送到 QQ，返回成功条数。"""
+    """把待推送的高价值 km 推送到 QQ，返回成功条数。
+
+    ``kill_monitor.push_enabled`` 为 false 时不做任何播报（仅入库），
+    并把本轮达标记录标记为已处理，避免以后重新开启时补推一大批旧数据。
+    """
+    if not cfg.get("push_enabled", True):
+        if not dry_run:
+            marked = db.mark_all_pending_pushed(cfg["min_isk"])
+            if marked:
+                log(f"播报已关闭（push_enabled=false）：{marked} 条达标记录仅入库、不推送")
+        return 0
     rows = db.pending_high_value_kills(
         cfg["min_isk"], limit=cfg["max_push_per_cycle"], since=since
     )
@@ -552,6 +590,7 @@ def main():
     log("全宇宙 km 监控启动："
         f"阈值 {fmt_isk(cfg['min_isk'])} ISK ｜ 间隔 {cfg['interval_seconds']}s"
         f" ｜ 初始化回溯 {cfg['lookback_hours']:g}h"
+        f" ｜ 播报 {'开' if cfg.get('push_enabled', True) else '关（仅入库，可用 QQ「击毁」查询）'}"
         f" ｜ 补推历史 {'是' if cfg['push_backfill'] else '否'}"
         f" ｜ 目标 {cfg['target_group'] or cfg['target_user']}"
         + (" ｜ [dry-run]" if args.dry_run else ""))
