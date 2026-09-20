@@ -142,7 +142,7 @@ python eve_push.py --dry-run              # 只预览不发送
 
 推送配置（config.json 的 `push` 字段）：
 ```json
-"push": { "target_user": YOUR_QQ, "target_group": null }
+"push": { "target_user": 123456789, "target_group": null }
 ```
 
 ## 星座 NPC 击杀监控（UniverseSystemKillsGet）
