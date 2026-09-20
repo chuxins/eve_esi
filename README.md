@@ -433,3 +433,7 @@ EFT 正文下方会**空两行**再接一条横线与补充信息（复制进游
 - OAuth token（含 refresh_token）保存在数据库，请勿泄露数据库凭据。
 - EVE 官方要求设置合理的 `User-Agent`，建议带上联系方式，避免被 ESI 限流。
 - 回调服务器绑定 `0.0.0.0`，请确保 EVE 回调端口仅按需对公网开放。
+- `config.json`（含 Client Secret、数据库密码、OneBot access_token）与 `.report_auth`
+  等敏感文件均已列入 `.gitignore`，切勿提交；本仓库代码通过 `config.json` 注入凭据。
+- `report.html` 含角色余额等隐私信息，公网暴露时请加 Basic Auth 或放在反向代理之后。
+- 若从旧版本升级，请检查 `git log` 确认历史中不含自己的密钥（如不慎提交需改写历史并轮换密钥）。
