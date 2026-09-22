@@ -20,6 +20,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -60,8 +61,12 @@ def parse_item_query(text):
     - 数量为正整数，允许千分位逗号/下划线（如 1,000），全角 ＊ 等价 *
     - ``*`` 后为空（如「三钛合金*」）时数量按 1 计算
     - 名称两侧的空白与分隔符（：: ，,、等）会被剔除
-    - 兼容多列粘贴（如从市场/装配清单复制来的「物品名*　市场分类*　数量」）：
-      以 ``*`` 切分后取**第 1 列**为物品名、**末列**的纯数字为数量，中间列（分类）丢弃
+    - 兼容多列粘贴（如「物品名*　市场分类*　数量」）：以 ``*`` 切分后取
+      **第 1 列**为物品名、**末列**的纯数字为数量，中间列（分类）丢弃
+    - 兼容**表格粘贴**（列间为制表符或 2 个以上空格，如
+      「名称␣␣␣␣数量␣␣␣␣-␣␣␣␣-」）：第 1 列为物品名，其后第一个纯数字列视为数量，
+      ``-`` 等占位列忽略
+    - 兼容单空格写法「三钛合金 1000」（末列为纯数字时视为数量）
     - 数量格式非法或缺少名称时抛 ValueError
     """
     text = str(text or "").replace("＊", "*")
@@ -83,6 +88,34 @@ def parse_item_query(text):
         return name, quantity
 
     if "*" not in text:
+        # 表格粘贴：制表符或 2 个以上空格分列（单个空格留给含空格的物品名）
+        fields = [f for f in re.split(r"\t+|\s{2,}", text.strip()) if f.strip()]
+        if len(fields) >= 2:
+            name = _clean_item_name(fields[0])
+            if not name:
+                raise ValueError("缺少物品名称")
+            for field in fields[1:]:
+                token = field.strip().replace(",", "").replace("_", "")
+                if not token.isdigit():
+                    continue  # 「-」等占位列忽略
+                quantity = int(token)
+                if not 1 <= quantity <= MAX_QUANTITY:
+                    raise ValueError(f"数量需在 1 ~ {MAX_QUANTITY:,} 之间")
+                return name, quantity
+            return name, None  # 各列都没有数字 → 只查单价
+
+        # 单空格分隔且末列是纯数字（如「三钛合金 1000」）→ 末列视为数量
+        tokens = text.split()
+        if len(tokens) >= 2:
+            tail = tokens[-1].replace(",", "").replace("_", "")
+            if tail.isdigit():
+                name = _clean_item_name(" ".join(tokens[:-1]))
+                if name:
+                    quantity = int(tail)
+                    if not 1 <= quantity <= MAX_QUANTITY:
+                        raise ValueError(f"数量需在 1 ~ {MAX_QUANTITY:,} 之间")
+                    return name, quantity
+
         name = _clean_item_name(text)
         if not name:
             raise ValueError("缺少物品名称")
@@ -107,8 +140,10 @@ def parse_item_query(text):
 def parse_batch_query(text):
     """解析批量查价文本（每行一个「物品名称[*数量]」）。
 
-    单行解析交给 :func:`parse_item_query`，因此同样支持多列粘贴
-    （「物品名*　市场分类*　数量」，中间列会被忽略）。
+    单行解析交给 :func:`parse_item_query`，因此同样支持：
+    - 多列粘贴「物品名*　市场分类*　数量」（中间列忽略）
+    - 表格粘贴「名称␣␣␣␣数量␣␣␣␣-␣␣␣␣-」（制表符/2+ 空格分列，``-`` 占位列忽略）
+    - 单空格写法「三钛合金 1000」
 
     返回 (items, errors)：
     - items  [(名称, 数量或 None), ...]
