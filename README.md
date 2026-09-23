@@ -145,40 +145,6 @@ python eve_push.py --dry-run              # 只预览不发送
 "push": { "target_user": 123456789, "target_group": null }
 ```
 
-## 星座 NPC 击杀监控（UniverseSystemKillsGet）
-
-基于公开端点 `GET /v3/universe/system_kills/` 监控指定星座内所有星系的 NPC 击杀数量，   
-超过阈值时自动 QQ 推送报警（无需授权）。
-
-```bash
-# 查询星座内各星系 NPC 击杀情况
-python constellation_kills.py
-
-# 指定星座 / 阈值临时覆盖
-python constellation_kills.py --constellation YX-LYK
-python constellation_kills.py --threshold 50
-
-# 只检查是否超阈值并推送（定时任务已自动调用）
-python constellation_kills.py --check
-```
-
-配置（config.json 的 `monitor` 段，星座/阈值/时间窗口均可自定义）：
-```json
-"monitor": {
-  "enabled": true,
-  "constellation": "YX-LYK",
-  "threshold": 30,
-  "window_minutes": 60
-}
-```
-- `threshold`：报警阈值（过去时间窗口内的 NPC 击杀数超过即报警）
-- `window_minutes`：报警时间窗口（默认 60 = 过去 1 小时）
-
-实现原理：定时保存 `system_kills_snapshot` 快照，报警时计算
-「当前快照值 − 窗口起点快照值」得出窗口内新增击杀数。
-
-报警去重：`monitor_state.json` 记录各星系最近报警值，仅当窗口内击杀继续增长时再次报警。
-
 ## QQ 机器人命令
 
 在 QQ 中给机器人（`BOT_QQ`）发送命令，自动回复。
