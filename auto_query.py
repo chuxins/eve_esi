@@ -16,6 +16,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -43,8 +44,23 @@ def now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+_DONATION_RE = re.compile(r"^(.+?) deposited cash into (.+?)'s account$")
+
+
+def _is_player_donation(description):
+    """判断流水是否为玩家捐赠（仅这类流水才自动推送）。
+
+    数据库存 ESI 原文描述：玩家捐赠形如
+    "X deposited cash into Y's account"（如
+    "wangshuai deposited cash into chuxins1's account"），
+    另有少见的固定文本 "Player donation"。
+    """
+    d = (description or "").strip()
+    return bool(_DONATION_RE.match(d)) or d == "Player donation"
+
+
 def _build_batch_message(entries, cname, db=None):
-    """构建单批推送消息（含收入/支出头部摘要）。
+    """构建单批推送消息（含收入摘要）。
 
     当 db 可用时，会把“市场托管释放”替换为关联的市场交易详情。
     """
@@ -52,7 +68,6 @@ def _build_batch_message(entries, cname, db=None):
 
     lines = []
     income = 0.0
-    expense = 0.0
     for e in entries:
         d = str(e.get("journal_date"))[:16]
         amount = float(e.get("amount") or 0)
@@ -83,12 +98,10 @@ def _build_batch_message(entries, cname, db=None):
 
         if amount >= 0:
             income += amount
-        else:
-            expense += amount
 
     header = (
-        f"📬 {cname} 新流水（{len(entries)} 条）\n"
-        f"📥 收入 {income:+,.0f} ｜ 📤 支出 {expense:+,.0f}\n"
+        f"📬 {cname} 收到玩家捐赠（{len(entries)} 笔）\n"
+        f"📥 收入 {income:+,.0f} ISK\n"
         f"────────────────"
     )
     return header + "\n" + "\n".join(lines)
@@ -119,10 +132,13 @@ def _latest_ref_id(db, cid):
 
 
 def push_new_flow(config, db):
-    """推送每个角色上次推送之后所有未推送的流水到 QQ（分批发送）。
+    """推送每个角色上次处理之后的新流水到 QQ（分批发送）。
 
-    通过 push_state.json 按 character_id 记录最后推送的流水 ID；本次取出
-    ref_id 大于该 ID 的全部流水分批推送。一次最多推送 50 条，其余下轮继续。
+    通过 push_state.json 按 character_id 记录最后处理的流水 ID；本次取出
+    ref_id 大于该 ID 的全部流水分批推送。一次最多处理 50 条，其余下轮继续。
+
+    自动推送只覆盖「玩家捐赠」（"X deposited cash into Y's account" /
+    "Player donation"）：其它类型流水直接跳过，游标照常推进，不推送也不重拉。
 
     重要：只有消息真正送达（status=ok）后才推进 last_push_id；
     任一批次失败立即停止，该批及后续保留在状态文件之后，下轮自动重试。
@@ -163,12 +179,20 @@ def push_new_flow(config, db):
         if not pending:
             continue  # 无新流水
 
+        # 只推送玩家捐赠；其它类型流水跳过（游标推进，标记已处理）
+        donate = [e for e in pending if _is_player_donation(e.get("description"))]
+        if not donate:
+            per_char[key] = {"last_push_id": int(pending[-1]["ref_id"]), "pushed_at": now_str()}
+            changed = True
+            print(f"[{now_str()}] {cname} 本轮无玩家捐赠，{len(pending)} 条其它流水已跳过")
+            continue
+
         ok_msgs = 0
         delivered_last = last_id  # 仅推进真正送达的流水 ID
-        for i in range(0, len(pending), batch_size):
-            batch = pending[i:i + batch_size]
+        for i in range(0, len(donate), batch_size):
+            batch = donate[i:i + batch_size]
             msg = _build_batch_message(batch, cname, db)
-            if report_url and i + batch_size >= len(pending):
+            if report_url and i + batch_size >= len(donate):
                 msg = msg + f"\n📊 图表：{report_url}"
             try:
                 resp = send_message(msg, target_user=target_user, target_group=target_group)
@@ -182,12 +206,18 @@ def push_new_flow(config, db):
                 print(f"[{now_str()}] {cname} 推送失败: {exc}")
                 break
 
-        if delivered_last != last_id:
+        last_donate_ref = int(donate[-1]["ref_id"])
+        if delivered_last >= last_donate_ref:
+            # 所有捐赠流水已送达：本批非捐赠流水一并标记已处理，游标推进到本批末尾
+            per_char[key] = {"last_push_id": int(pending[-1]["ref_id"]), "pushed_at": now_str()}
+            changed = True
+            print(f"[{now_str()}] 已推送 {cname} 的 {ok_msgs} 批玩家捐赠至 QQ")
+        elif delivered_last != last_id:
             per_char[key] = {"last_push_id": delivered_last, "pushed_at": now_str()}
             changed = True
-            print(f"[{now_str()}] 已推送 {cname} 的 {ok_msgs} 批流水至 QQ")
+            print(f"[{now_str()}] 已推送 {cname} 的 {ok_msgs} 批玩家捐赠至 QQ（部分失败，其余保留待重试）")
         else:
-            print(f"[{now_str()}] {cname} 推送未成功：{len(pending)} 条流水保留待重试")
+            print(f"[{now_str()}] {cname} 捐赠推送未成功：{len(donate)} 条保留待重试")
 
     if changed:
         _save_push_state(state)

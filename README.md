@@ -129,7 +129,7 @@ cd eve_esi && nohup python3 -m http.server 8081 --bind 0.0.0.0 > /tmp/http_repor
 
 前置：NapCat 已运行且 OneBot HTTP 服务器开启（本项目配置为 `127.0.0.1:3000`）。
 
-**自动推送（已集成到定时任务）**：`auto_query.py` 每次同步后自动检测新流水并推送到配置的目标（通过 `push_state.json` 记录最后推送的流水 ID，避免重复推送）。其中“市场托管释放”流水会替换为关联的市场交易详情（物品名、买卖方向、数量、单价、总额）。
+**自动推送（已集成到定时任务）**：`auto_query.py` 每次同步后自动检测新流水并推送到配置的目标（通过 `push_state.json` 记录最后处理的流水 ID，避免重复推送）。**自动推送只覆盖「玩家捐赠」**（描述形如 `X deposited cash into Y's account` / `Player donation`），其余类型流水自动跳过、不推送；按需查看完整流水请用 QQ 指令「流水 <角色名>」。
 
 ```bash
 # 手动推送
