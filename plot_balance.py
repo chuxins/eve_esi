@@ -23,6 +23,10 @@ from matplotlib import font_manager
 from main import get_db, load_config, resolve_characters
 
 
+class NoBalanceDataError(Exception):
+    """没有任何可绘制的余额历史数据时抛出（供调用方区分"无数据"与一般错误）。"""
+
+
 def _setup_chinese_font():
     """尝试设置中文字体，找不到则回退默认（英文标签）。"""
     candidates = [
@@ -71,8 +75,9 @@ def plot_balance(config, char_arg=None, limit=200, output="balance_history.png",
                   f"→ 末 {fmt_isk(last)} ISK，变动 {change:+,.0f} ISK")
 
     if not plotted:
-        print("没有任何可绘制的余额历史数据，请先运行 auto_query.py 或 main.py 采集数据。")
-        sys.exit(1)
+        raise NoBalanceDataError(
+            "没有任何可绘制的余额历史数据，请先运行 auto_query.py 或 main.py 采集数据。"
+        )
 
     # 图表样式
     if has_chinese:

@@ -24,7 +24,7 @@
 
 ```bash
 cd eve_esi
-pip install -r requirements.txt   # requests + pymysql
+pip install -r requirements.txt   # requests + pymysql + matplotlib
 
 # 创建数据库与用户（示例）
 mysql -e "CREATE DATABASE eve_esi CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"

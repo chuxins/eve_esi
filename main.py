@@ -124,11 +124,24 @@ def get_access_token(config, db, character_id):
     return None
 
 
+class NoCharactersError(Exception):
+    """数据库中没有已授权角色时抛出（供常驻进程安全降级，而非退出）。"""
+
+
+class CharacterNotFoundError(Exception):
+    """按名称/ID 找不到指定角色时抛出。"""
+
+
 def resolve_characters(db, char_arg=None):
-    """解析目标角色列表。char_arg 为 None 时返回全部角色。"""
+    """解析目标角色列表。char_arg 为 None 时返回全部角色。
+
+    没有角色或找不到指定角色时抛异常（而非 sys.exit）：
+    SystemExit 不继承 Exception，会穿透 except Exception 把
+    auto_query 等常驻进程直接杀死，此处统一改为异常以便调用方降级。
+    """
     chars = db.list_characters()
     if not chars:
-        sys.exit("数据库中没有已授权角色，请先运行：python main.py --add-account")
+        raise NoCharactersError("数据库中没有已授权角色，请先运行：python main.py --add-account")
     if not char_arg:
         return chars
     matched = [
@@ -136,7 +149,9 @@ def resolve_characters(db, char_arg=None):
         if str(c["character_id"]) == str(char_arg) or c["character_name"] == char_arg
     ]
     if not matched:
-        sys.exit(f"未找到角色 {char_arg}，可用 python main.py --list 查看已授权角色。")
+        raise CharacterNotFoundError(
+            f"未找到角色 {char_arg}，可用 python main.py --list 查看已授权角色。"
+        )
     return matched
 
 

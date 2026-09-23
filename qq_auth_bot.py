@@ -35,7 +35,7 @@ from market_price import (MAX_BATCH_ITEMS, PRICE_CACHE_TTL, format_batch_message
                           format_price_message, get_price_table, jita_sell_prices,
                           parse_batch_query, parse_item_query, price_cache_age,
                           query_batch, query_item, refresh_price_cache)
-from plot_balance import plot_balance
+from plot_balance import NoBalanceDataError, plot_balance
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EVENT_HOST = "127.0.0.1"
@@ -814,7 +814,7 @@ def _on_chart(user_id, text):
             current_balance=current_balance,
             balance_source=balance_source or "ESI",
         )
-    except SystemExit:
+    except NoBalanceDataError:
         try:
             send_message(f"❌ 角色「{name}」暂无余额历史数据，请稍后再试。", target_user=user_id)
         except Exception as exc:

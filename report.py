@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 from esi_client import ESIClient, translate_description
-from main import get_db, load_config, resolve_characters
+from main import NoCharactersError, get_db, load_config, resolve_characters
 
 OUTPUT_DEFAULT = "report.html"
 
@@ -81,7 +81,12 @@ def make_balance_chart(history, title):
 
 
 def build_report(config, db, char_arg, limit):
-    chars = resolve_characters(db, char_arg)
+    try:
+        chars = resolve_characters(db, char_arg)
+    except NoCharactersError:
+        # 无角色时生成空报告：auto_query 定时任务依赖 build_report 不抛异常，
+        # 若在此 sys.exit/抛错会让常驻进程退出。
+        chars = []
     has_cjk = _setup_chinese_font()
 
     cards_html = ""
