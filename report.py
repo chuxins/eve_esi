@@ -16,41 +16,20 @@ import html
 import io
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
-# 根文件系统可能只读（/root/.config 不可写），把 matplotlib 缓存指向可写目录，
-# 避免每次启动打印 "Matplotlib created a temporary cache directory" 警告
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-_MPL_CACHE_DIR = os.path.join(_BASE_DIR, ".mplcache")
-os.environ.setdefault("MPLCONFIGDIR", _MPL_CACHE_DIR)
-os.makedirs(_MPL_CACHE_DIR, exist_ok=True)
+# 复用 charts.py 的公共辅助：MPLCONFIGDIR 指向可写目录（根文件系统可能只读）、
+# 设置 Agg 后端与中文字体探测，避免本文件重复实现。
+from charts import setup_chinese_font
 
 import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
-from matplotlib import font_manager
 
 from esi_client import ESIClient, translate_description
 from main import NoCharactersError, get_db, load_config, resolve_characters
 
 OUTPUT_DEFAULT = "report.html"
-
-
-def _setup_chinese_font():
-    """设置中文字体；返回是否成功。"""
-    candidates = [
-        "Noto Sans CJK SC", "WenQuanYi Micro Hei", "WenQuanYi Zen Hei",
-        "SimHei", "Microsoft YaHei", "PingFang SC",
-    ]
-    available = {f.name for f in font_manager.fontManager.ttflist}
-    for name in candidates:
-        if name in available:
-            plt.rcParams["font.sans-serif"] = [name, "DejaVu Sans"]
-            plt.rcParams["axes.unicode_minus"] = False
-            return True
-    return False
 
 
 def _fmt(value):
@@ -87,7 +66,7 @@ def build_report(config, db, char_arg, limit):
         # 无角色时生成空报告：auto_query 定时任务依赖 build_report 不抛异常，
         # 若在此 sys.exit/抛错会让常驻进程退出。
         chars = []
-    has_cjk = _setup_chinese_font()
+    has_cjk = setup_chinese_font()
 
     cards_html = ""
     charts_html = ""
@@ -167,7 +146,7 @@ def build_report(config, db, char_arg, limit):
             </table>
         </div>"""
 
-    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    generated_at = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
     title = "EVE 钱包余额报告"
     page_title = title if has_cjk else "EVE Wallet Report"
 

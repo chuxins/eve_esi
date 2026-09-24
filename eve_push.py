@@ -117,6 +117,24 @@ def get_latest_from_db(db):
     return entry, balance, c
 
 
+def market_escrow_transactions(db, character_id, ref_ids):
+    """按 journal_ref_id 取关联的市场交易详情，返回 [(名称, 方向, 数量, 单价, 总额)]。
+
+    供 eve_push 与 auto_query 共用，避免两处重复实现「市场托管释放 → 交易详情」。
+    """
+    out = []
+    for txn in db.get_wallet_transactions_by_journal_refs(character_id, ref_ids):
+        name = txn.get("type_name") or (
+            f"物品#{txn.get('type_id')}" if txn.get("type_id") else "未知物品"
+        )
+        action = "买入" if txn.get("is_buy") else "卖出"
+        qty = int(txn.get("quantity") or 0)
+        unit = float(txn.get("unit_price") or 0)
+        total = float(txn.get("total_price") or unit * qty)
+        out.append((name, action, qty, unit, total))
+    return out
+
+
 def format_message(entry, balance, character, db=None):
     """将流水格式化为中文推送消息。
 
@@ -147,17 +165,9 @@ def format_message(entry, balance, character, db=None):
     market_lines = []
     if db is not None and desc_cn == "市场托管释放":
         journal_ref_id = entry.get("id") or entry.get("ref_id")
-        txns = db.get_wallet_transactions_by_journal_refs(
-            character["character_id"], [journal_ref_id]
-        )
-        for txn in txns:
-            name = txn.get("type_name") or (
-                f"物品#{txn.get('type_id')}" if txn.get("type_id") else "未知物品"
-            )
-            action = "买入" if txn.get("is_buy") else "卖出"
-            qty = int(txn.get("quantity") or 0)
-            unit = float(txn.get("unit_price") or 0)
-            total = float(txn.get("total_price") or unit * qty)
+        for name, action, qty, unit, total in market_escrow_transactions(
+            db, character["character_id"], [journal_ref_id]
+        ):
             market_lines.append(
                 f"📦 {name} {action} x{qty} 单价 {unit:,.2f} ISK，总额 {total:+,.2f} ISK"
             )

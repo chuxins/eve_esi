@@ -19,7 +19,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from esi_client import ESIClient
 from main import get_access_token, get_db, load_config
@@ -34,6 +34,8 @@ except (AttributeError, ValueError):
 
 DEFAULT_INTERVAL = 120  # 2 分钟
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 与数据库统一使用北京时间（UTC+8），避免系统时区为 UTC 时日志/状态错位
+BEIJING_TZ = timezone(timedelta(hours=8))
 # HTML 报告输出到可写目录（根文件系统曾只读，/var/www/report 不可写；
 # 改到工作目录内，与 report.py 默认输出保持一致）
 REPORT_PATH = os.path.join(BASE_DIR, "report.html")
@@ -41,7 +43,7 @@ PUSH_STATE_PATH = os.path.join(BASE_DIR, "push_state.json")
 
 
 def now_str():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
 _DONATION_RE = re.compile(r"^(.+?) deposited cash into (.+?)'s account$")
@@ -77,15 +79,10 @@ def _build_batch_message(entries, cname, db=None):
 
         market_lines = []
         if db is not None and cid and ref_id and desc == "市场托管释放":
-            txns = db.get_wallet_transactions_by_journal_refs(cid, [ref_id])
-            for txn in txns:
-                name = txn.get("type_name") or (
-                    f"物品#{txn.get('type_id')}" if txn.get("type_id") else "未知物品"
-                )
-                action = "买入" if txn.get("is_buy") else "卖出"
-                qty = int(txn.get("quantity") or 0)
-                unit = float(txn.get("unit_price") or 0)
-                total = float(txn.get("total_price") or unit * qty)
+            from eve_push import market_escrow_transactions
+            for name, action, qty, unit, total in market_escrow_transactions(
+                db, cid, [ref_id]
+            ):
                 market_lines.append(
                     f"{d}  {amount:+,.0f}  📦 {name} {action} x{qty} "
                     f"单价 {unit:,.2f} 总额 {total:+,.2f}"
@@ -268,6 +265,7 @@ def query_once(config, db):
             continue
 
         client = ESIClient(access_token, config["user_agent"])
+        entries = []
         try:
             # 余额
             balance = client.get_wallet_balance(cid)
@@ -289,15 +287,58 @@ def query_once(config, db):
         except Exception as exc:  # 单角色失败不影响其它角色
             print(f"[{now_str()}] 查询 {c['character_name']} 失败: {exc}")
 
-        # 市场交易详情（单独容错，不因交易接口失败影响余额/流水）
-        try:
-            from market import sync_market_transactions
-            tx_entries = sync_market_transactions(db, client, cid)
-            print(
-                f"[{now_str()}] {c['character_name']} 市场交易：本次同步 {len(tx_entries)} 条"
-            )
-        except Exception as exc:
-            print(f"[{now_str()}] {c['character_name']} 市场交易同步失败: {exc}")
+        # 市场交易详情（单独容错，不因交易接口失败影响余额/流水）。
+        # 仅当本轮有新增流水时才同步：交易必然对应新的 journal 条目，
+        # 无新增时反复全量拉最新一页属于浪费（大多数 2 分钟轮次没有新流水）。
+        if entries:
+            try:
+                from market import sync_market_transactions
+                tx_entries = sync_market_transactions(db, client, cid)
+                print(
+                    f"[{now_str()}] {c['character_name']} 市场交易：本次同步 {len(tx_entries)} 条"
+                )
+            except Exception as exc:
+                print(f"[{now_str()}] {c['character_name']} 市场交易同步失败: {exc}")
+
+
+def _data_fingerprint(db):
+    """生成「数据是否变化」的指纹：各角色最大流水 ID + 最新余额。"""
+    fp = []
+    try:
+        for c in db.list_characters():
+            cid = c["character_id"]
+            max_ref = db.get_max_journal_ref_id(cid)
+            hist = db.get_balance_history(cid, limit=1)
+            bal = float(hist[0]["balance"]) if hist else None
+            fp.append((cid, max_ref, bal))
+    except Exception as exc:
+        print(f"[{now_str()}] 计算数据指纹失败: {exc}")
+        return None
+    return fp
+
+
+BALANCE_SNAPSHOT_KEEP_DAYS = 7    # 余额快照：7 天内全保留，更早按天降采样
+KILLMAIL_KEEP_DAYS = 14           # 全宇宙 km：只保留最近 14 天
+
+
+def prune_data(db):
+    """每日一次的数据清理：余额快照降采样 + 清理过期 km。
+
+    用 push_state.json 的 last_prune_date 做「每天最多执行一次」的守卫。
+    """
+    state = _load_push_state()
+    today = now_str()[:10]
+    if state.get("last_prune_date") == today:
+        return
+    try:
+        removed_bal = db.prune_balance_snapshots(BALANCE_SNAPSHOT_KEEP_DAYS)
+        removed_km = db.delete_old_killmails(KILLMAIL_KEEP_DAYS)
+        state["last_prune_date"] = today
+        _save_push_state(state)
+        print(f"[{now_str()}] 数据清理完成：余额快照降采样删除 {removed_bal} 条，"
+              f"过期 km 清理 {removed_km} 条")
+    except Exception as exc:
+        print(f"[{now_str()}] 数据清理失败: {exc}")
 
 
 def main():
@@ -318,11 +359,22 @@ def main():
     print(f"[{now_str()}] 定时查询已启动：每 {args.interval} 秒执行一次（Ctrl+C 停止）")
     print(f"[{now_str()}] 已授权角色：{', '.join(c['character_name'] for c in db.list_characters()) or '无'}")
 
+    last_fp = None
+    cycles_since_report = 0
     while True:
         try:
             query_once(config, db)
             push_new_flow(config, db)
-            regenerate_report(config, db)
+            prune_data(db)
+            # 报告按需重生成：数据变化时立即更新；否则每 30 轮（约 1 小时）兜底刷新一次，
+            # 避免数据未变时每 2 分钟用 matplotlib 重绘全部图表（CPU/IO 浪费）。
+            fp = _data_fingerprint(db)
+            if fp is not None and (fp != last_fp or cycles_since_report >= 30):
+                regenerate_report(config, db)
+                last_fp = fp
+                cycles_since_report = 0
+            else:
+                cycles_since_report += 1
         except KeyboardInterrupt:
             print(f"\n[{now_str()}] 已停止。")
             break

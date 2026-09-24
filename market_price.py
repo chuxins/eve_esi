@@ -297,6 +297,22 @@ def get_price_table():
 _jita_sell_cache = {}
 JITA_SELL_TTL = 600  # 秒
 
+# 星域挂单原始结果的进程内缓存：{type_id: (orders, ts)}
+# 「查价」与装配估价共享同一份缓存，重复查询几乎不产生 ESI 请求。
+_REGION_ORDERS_CACHE = {}
+REGION_ORDERS_TTL = 300  # 秒；ESI 挂单约 5 分钟更新
+
+
+def _get_region_orders_cached(client, type_id):
+    """取 The Forge 星域某物品挂单，带 5 分钟 TTL 缓存。"""
+    cached = _REGION_ORDERS_CACHE.get(type_id)
+    now = time.time()
+    if cached and now - cached[1] <= REGION_ORDERS_TTL:
+        return cached[0]
+    orders = client.get_region_orders(FORGE_REGION_ID, type_id)
+    _REGION_ORDERS_CACHE[type_id] = (orders, now)
+    return orders
+
 
 def jita_sell_prices(type_ids, user_agent=DEFAULT_UA, workers=8, ttl=JITA_SELL_TTL):
     """并发查询一批 type_id 的 Jita 4-4 最低卖单价，返回 {type_id: 单价}。
@@ -325,7 +341,7 @@ def jita_sell_prices(type_ids, user_agent=DEFAULT_UA, workers=8, ttl=JITA_SELL_T
 
     def work(type_id):
         try:
-            orders = client.get_region_orders(FORGE_REGION_ID, type_id)
+            orders = _get_region_orders_cached(client, type_id)
             return type_id, _calc_prices(orders)["sell"]
         except Exception as exc:  # 单个物品失败不影响整体
             print(f"  Jita 卖价查询失败 type_id={type_id}: {exc}")
@@ -477,7 +493,7 @@ def query_item(name, db=None, output_path=None, user_agent=DEFAULT_UA,
 
     type_id = hit["type_id"]
     display_name = hit["name"]
-    orders = client.get_region_orders(FORGE_REGION_ID, type_id)
+    orders = _get_region_orders_cached(client, type_id)
     prices = _calc_prices(orders)
     history = fetch_history(client, type_id, days) if with_history else []
 

@@ -13,33 +13,17 @@ import argparse
 import os
 import sys
 
-import matplotlib
+from charts import setup_chinese_font  # 设置 MPLCONFIGDIR 缓存目录、Agg 后端与中文字体
 
-matplotlib.use("Agg")  # 无显示环境（服务器）使用非交互后端
+import matplotlib
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
-from matplotlib import font_manager
 
 from main import get_db, load_config, resolve_characters
 
 
 class NoBalanceDataError(Exception):
     """没有任何可绘制的余额历史数据时抛出（供调用方区分"无数据"与一般错误）。"""
-
-
-def _setup_chinese_font():
-    """尝试设置中文字体，找不到则回退默认（英文标签）。"""
-    candidates = [
-        "Noto Sans CJK SC", "WenQuanYi Micro Hei", "WenQuanYi Zen Hei",
-        "SimHei", "Microsoft YaHei", "PingFang SC",
-    ]
-    available = {f.name for f in font_manager.fontManager.ttflist}
-    for name in candidates:
-        if name in available:
-            plt.rcParams["font.sans-serif"] = [name, "DejaVu Sans"]
-            plt.rcParams["axes.unicode_minus"] = False
-            return True
-    return False
 
 
 def fmt_isk(value):
@@ -51,7 +35,7 @@ def plot_balance(config, char_arg=None, limit=200, output="balance_history.png",
     db = get_db(config)
     chars = resolve_characters(db, char_arg)
 
-    has_chinese = _setup_chinese_font()
+    has_chinese = setup_chinese_font()
     fig, ax = plt.subplots(figsize=(12, 6))
 
     plotted = False

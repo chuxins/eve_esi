@@ -36,7 +36,54 @@ TOKEN_FILE_PATH = os.path.join(BASE_DIR, "token.json")  # 旧版单角色文件�
 
 # ---------------------------------------------------------------- 配置加载
 
+def _env_override(config):
+    """用环境变量覆盖敏感配置（密钥不进配置文件/历史记录）。
+
+    仅覆盖 `config.json` 已存在或环境变量已设置的键；环境变量优先。
+    用于把 client_secret / DB 密码 / OneBot token 等移出明文配置文件。
+    """
+    env_map = {
+        "EVE_CLIENT_ID": ("client_id", str),
+        "EVE_CLIENT_SECRET": ("client_secret", str),
+        "EVE_CALLBACK_URL": ("callback_url", str),
+        "EVE_USER_AGENT": ("user_agent", str),
+        "EVE_DB_HOST": ("db.host", str),
+        "EVE_DB_PORT": ("db.port", int),
+        "EVE_DB_USER": ("db.user", str),
+        "EVE_DB_PASSWORD": ("db.password", str),
+        "EVE_DB_NAME": ("db.database", str),
+        "EVE_PUSH_ACCESS_TOKEN": ("push.access_token", str),
+    }
+    for env, (path, cast) in env_map.items():
+        if env not in os.environ:
+            continue
+        value = os.environ[env]
+        if cast is int:
+            try:
+                value = int(value)
+            except ValueError:
+                sys.exit(f"环境变量 {env} 必须是整数，当前值: {value!r}")
+        keys = path.split(".")
+        target = config
+        for key in keys[:-1]:
+            target = target.setdefault(key, {})
+        target[keys[-1]] = value
+    return config
+
+
+_CONFIG_CACHE = {"mtime": 0.0, "data": None}
+
+
 def load_config():
+    # 进程内缓存 + mtime 校验：QQ 机器人每条消息都会调用，避免反复读盘。
+    # 配置文件被编辑后下次调用自动重新加载。
+    try:
+        mtime = os.path.getmtime(CONFIG_PATH)
+    except OSError:
+        mtime = -1.0
+    if _CONFIG_CACHE["data"] is not None and _CONFIG_CACHE["mtime"] == mtime:
+        return _CONFIG_CACHE["data"]
+
     if not os.path.exists(CONFIG_PATH):
         sys.exit(
             f"未找到配置文件 {CONFIG_PATH}\n"
@@ -44,6 +91,8 @@ def load_config():
         )
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
+
+    config = _env_override(config)
 
     required = ("client_id", "client_secret", "callback_url")
     for key in required:
@@ -57,6 +106,7 @@ def load_config():
     config["scope"] = " ".join(scopes)
     config.setdefault("user_agent", "eve-wallet-tracker/1.0")
     config.setdefault("journal_limit", 50)
+    _CONFIG_CACHE.update(mtime=mtime, data=config)
     return config
 
 

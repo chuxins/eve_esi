@@ -11,6 +11,7 @@ config.json
 .report_auth
 push_state.json
 *.log
+*.log.*
 kill_monitor_state.json
 kill_monitor_regions.json
 

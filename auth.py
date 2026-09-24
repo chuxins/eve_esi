@@ -154,11 +154,9 @@ def refresh_access_token(refresh_token, client_id, client_secret, user_agent):
 
     token = resp.json()
     token["expires_at"] = _expires_at(token)
-    # 刷新响应通常不再返回 refresh_token，若返回则覆盖
-    if "refresh_token" in token and token["refresh_token"]:
-        token["refresh_token"] = token["refresh_token"]
-    else:
-        # 保留旧 refresh_token（EVE 的 refresh token 长期有效）
+    # 刷新响应通常不再返回 refresh_token；EVE 的 refresh token 长期有效，
+    # 若响应没带则沿用旧的（幂等覆盖）。
+    if not token.get("refresh_token"):
         token["refresh_token"] = refresh_token
     return token
 

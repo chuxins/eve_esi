@@ -6,6 +6,7 @@
 """
 
 import re
+import time
 
 import requests
 
@@ -119,6 +120,10 @@ class ESIError(RuntimeError):
 
 
 class ESIClient:
+    # ESI 限流/临时错误码：420 = error limit reached，429 = rate limit，5xx = 服务端临时故障
+    _RETRY_CODES = {420, 429, 500, 502, 503, 504}
+    _MAX_RETRIES = 3
+
     def __init__(self, access_token=None, user_agent="eve-wallet-tracker/1.0"):
         """access_token 为 None 时只访问公开端点（不带 Authorization 头）。"""
         self.access_token = access_token
@@ -133,10 +138,39 @@ class ESIClient:
             headers["Authorization"] = f"Bearer {self.access_token}"
         return headers
 
+    def _request_with_retry(self, method, url, params=None, json=None):
+        """发起请求并自动重试限流/临时错误（指数退避，尊重 Retry-After）。
+
+        仅用于幂等请求（GET / POST 查询类端点）；token 交换等带副作用且
+        单次有效的请求不在此重试（auth.py 单独处理）。
+        """
+        last_error = None
+        for attempt in range(self._MAX_RETRIES):
+            try:
+                resp = requests.request(
+                    method, url, headers=self._headers(),
+                    params=params, json=json, timeout=30,
+                )
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < self._MAX_RETRIES - 1:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise ESIError(f"ESI 网络请求失败：{url} -> {exc}") from exc
+            if resp.status_code in self._RETRY_CODES and attempt < self._MAX_RETRIES - 1:
+                try:
+                    wait = float(resp.headers.get("Retry-After") or 0)
+                except (TypeError, ValueError):
+                    wait = 0
+                time.sleep(wait or (2 * (attempt + 1)))
+                continue
+            return resp
+        raise ESIError(f"ESI 请求重试次数耗尽：{url} -> {last_error}")
+
     def _get_response(self, path, params=None, allow_404=False):
         """发起请求并返回响应对象（allow_404=True 且命中 404 时返回 None）。"""
         url = f"{ESI_BASE}{path}"
-        resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
+        resp = self._request_with_retry("GET", url, params=params)
         if resp.status_code == 404 and allow_404:
             return None
         if resp.status_code != 200:
@@ -150,9 +184,7 @@ class ESIClient:
     def _post(self, path, payload, params=None):
         """发起 POST 请求（用于 /v1/universe/ids/ 等端点）。"""
         url = f"{ESI_BASE}{path}"
-        resp = requests.post(
-            url, headers=self._headers(), params=params, json=payload, timeout=30
-        )
+        resp = self._request_with_retry("POST", url, params=params, json=payload)
         if resp.status_code != 200:
             raise ESIError(f"ESI 请求失败：{url} -> HTTP {resp.status_code} - {resp.text[:200]}")
         return resp.json()

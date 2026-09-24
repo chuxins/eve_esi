@@ -14,11 +14,14 @@
 """
 
 import base64
+import hashlib
+import hmac
 import http.client
 import json
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
@@ -30,7 +33,8 @@ from fittings import (FittingError, FittingScopeError, collect_type_ids,
                       eft_footer, fetch_fittings, format_candidates,
                       format_detail, format_eft, format_list, resolve_fitting)
 from kill_monitor import build_kill_line, display_names, fmt_isk, monitor_config
-from main import get_access_token, get_db, load_config
+from main import (CharacterNotFoundError, NoCharactersError,
+                  get_access_token, get_db, load_config, resolve_characters)
 from market_price import (MAX_BATCH_ITEMS, PRICE_CACHE_TTL, format_batch_message,
                           format_price_message, get_price_table, jita_sell_prices,
                           parse_batch_query, parse_item_query, price_cache_age,
@@ -46,6 +50,9 @@ STATE_TTL_SECONDS = 600  # 授权链接 10 分钟内有效
 # state → (code_verifier, created_at)
 _pending = {}
 _lock = threading.Lock()
+
+# 消息事件处理线程池：限流，避免恶意/突发消息打爆线程数
+_event_pool = ThreadPoolExecutor(max_workers=8)
 
 
 def _now():
@@ -70,10 +77,40 @@ def _extract_text(event):
 
 # ---------------------------------------------------------------- OneBot 事件
 
+def _authorized_report(headers, body, token):
+    """校验 OneBot 上报签名。
+
+    NapCat / SnowLuma（OneBot v11）上报时用 access_token 对请求体做
+    HMAC-SHA1，放在 ``X-Signature: sha1=<hex>`` 头；部分实现用
+    ``Authorization: Bearer <token>``。两种都接受，时间恒定比较。
+    """
+    sig = headers.get("X-Signature") or ""
+    if sig:
+        expected = "sha1=" + hmac.new(
+            token.encode("utf-8"), body, hashlib.sha1
+        ).hexdigest()
+        return hmac.compare_digest(sig.strip().lower(), expected)
+    auth = headers.get("Authorization") or ""
+    return hmac.compare_digest(auth.strip(), f"Bearer {token}")
+
+
 class _EventHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(length) if length else b""
+        # OneBot 上报鉴权：若 config 配置了 push.access_token，
+        # 则要求上报请求带合法的 X-Signature（或 Authorization: Bearer）。
+        try:
+            config = load_config()
+            token = (config.get("push", {}) or {}).get("access_token")
+        except BaseException:  # noqa: BLE001 配置缺失时放弃鉴权校验，不打断事件接收
+            token = None
+        if token and not _authorized_report(self.headers, body, token):
+            self.send_response(403)
+            self.end_headers()
+            print(f"[{_now()}] ⚠️ 拒绝未授权上报（签名校验失败）")
+            return
+
         self.send_response(204)
         self.end_headers()
         if not body:
@@ -82,7 +119,7 @@ class _EventHandler(BaseHTTPRequestHandler):
             event = json.loads(body)
         except Exception:
             return
-        threading.Thread(target=handle_event, args=(event,), daemon=True).start()
+        _event_pool.submit(handle_event, event)
 
     def log_message(self, *args):
         pass
@@ -107,6 +144,17 @@ def _is_command(text, command):
 def _strip_arg(text):
     """取出指令后的参数，去掉前置分隔符与空白。"""
     return str(text or "").lstrip(_CMD_SEPARATORS).strip()
+
+
+def _match_character(db, name):
+    """按名称/ID 匹配单个角色，找不到返回 None（复用 main.resolve_characters）。"""
+    if not name:
+        return None
+    try:
+        matched = resolve_characters(db, name)
+    except (NoCharactersError, CharacterNotFoundError):
+        return None
+    return matched[0] if matched else None
 
 
 def handle_event(event):
@@ -293,19 +341,14 @@ def _on_balance(user_id, text):
 
     config = load_config()
     db = get_db(config)
-    chars = db.list_characters()
-    matched = [
-        c for c in chars
-        if str(c["character_id"]) == name or c["character_name"] == name
-    ]
-    if not matched:
+    character = _match_character(db, name)
+    if not character:
         try:
             send_message(f"未找到角色「{name}」。发送「余额」可查看已授权角色列表。", target_user=user_id)
         except Exception as exc:
             print(f"[{_now()}] 发送查询结果失败: {exc}")
         return
 
-    character = matched[0]
     balance, source = _query_balance(config, db, character)
     if balance is None:
         try:
@@ -365,19 +408,14 @@ def _on_journal(user_id, text):
         return
 
     db = get_db(load_config())
-    chars = db.list_characters()
-    matched = [
-        c for c in chars
-        if str(c["character_id"]) == name or c["character_name"] == name
-    ]
-    if not matched:
+    character = _match_character(db, name)
+    if not character:
         try:
             send_message(f"未找到角色「{name}」。发送「余额」可查看已授权角色列表。", target_user=user_id)
         except Exception as exc:
             print(f"[{_now()}] 发送未找到角色失败: {exc}")
         return
 
-    character = matched[0]
     rows = db.get_journal(character["character_id"], limit=JOURNAL_LIMIT)
     if not rows:
         try:
@@ -556,15 +594,12 @@ def _on_fittings(user_id, text):
 
     config = load_config()
     db = get_db(config)
-    matched = [
-        c for c in db.list_characters()
-        if str(c["character_id"]) == char_arg or c["character_name"] == char_arg
-    ]
+    character = _match_character(db, char_arg)
     # 「装配 <序号>」（不是角色）→ 用上次列出的列表查看详情
-    if not matched and selector is None and char_arg.isdigit():
+    if not character and selector is None and char_arg.isdigit():
         _on_fitting_index(user_id, char_arg)
         return
-    if not matched:
+    if not character:
         try:
             send_message(
                 f"未找到角色「{char_arg}」。发送「余额」可查看已授权角色列表。",
@@ -574,7 +609,6 @@ def _on_fittings(user_id, text):
             print(f"[{_now()}] 发送未找到角色失败: {exc}")
         return
 
-    character = matched[0]
     cid = character["character_id"]
     cname = character["character_name"]
 
@@ -788,19 +822,14 @@ def _on_chart(user_id, text):
 
     config = load_config()
     db = get_db(config)
-    chars = db.list_characters()
-    matched = [
-        c for c in chars
-        if str(c["character_id"]) == name or c["character_name"] == name
-    ]
-    if not matched:
+    character = _match_character(db, name)
+    if not character:
         try:
             send_message(f"未找到角色「{name}」。发送「余额」可查看已授权角色列表。", target_user=user_id)
         except Exception as exc:
             print(f"[{_now()}] 发送未找到角色失败: {exc}")
         return
 
-    character = matched[0]
     output = os.path.join(BASE_DIR, f"chart_{character['character_id']}.png")
 
     # 优先从 ESI 获取当前余额，失败时回退数据库快照
@@ -980,6 +1009,20 @@ def _finish_authorize(code, verifier):
 
 # ---------------------------------------------------------------- 主流程
 
+def _purge_stale_pending():
+    """清理已过期的授权 state（用户放弃授权时不会触发回调，避免内存残留）。"""
+    try:
+        deadline = time.time() - STATE_TTL_SECONDS
+        with _lock:
+            stale = [s for s, (_, created) in _pending.items() if created < deadline]
+            for s in stale:
+                _pending.pop(s, None)
+        if stale:
+            print(f"[{_now()}] 已清理 {len(stale)} 个过期授权 state")
+    except Exception as exc:
+        print(f"[{_now()}] 清理过期授权 state 失败: {exc}")
+
+
 def _price_cache_worker():
     """后台线程：按需刷新 ESI 全局参考价缓存（供 PLEX 这类无挂单物品用）。
 
@@ -993,6 +1036,7 @@ def _price_cache_worker():
                 print(f"[{_now()}] 已刷新 ESI 全局参考价缓存")
         except Exception as exc:
             print(f"[{_now()}] 刷新全局参考价失败: {exc}")
+        _purge_stale_pending()
         time.sleep(3600)  # 每小时检查一次，实际每 24 小时刷新
 
 

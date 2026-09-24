@@ -17,6 +17,7 @@
 import os
 import re
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -114,6 +115,7 @@ class Database:
     """
 
     _BATCH_SIZE = 500  # 单次 executemany 的最大行数
+    _PING_INTERVAL = 30  # 心跳探测最小间隔（秒）：高频调用时避免每次操作都 ping
 
     def __init__(self, db_config):
         self.config = {
@@ -134,11 +136,19 @@ class Database:
     # ------------------------------------------------------------ 连接管理
 
     def _conn(self):
-        """返回当前线程复用的连接（先心跳探测，断线则重连）。"""
+        """返回当前线程复用的连接（先心跳探测，断线则重连）。
+
+        心跳探测做节流：距上次成功探测不足 _PING_INTERVAL 秒时直接复用，
+        避免 QQ 机器人高频操作下每个 SQL 都额外发一次 ping。
+        """
         conn = getattr(self._local, "conn", None)
         if conn is not None:
+            last_ping = getattr(self._local, "last_ping", 0.0)
+            if time.time() - last_ping < self._PING_INTERVAL:
+                return conn
             try:
                 conn.ping(reconnect=True)
+                self._local.last_ping = time.time()
                 return conn
             except pymysql.MySQLError:
                 self.close()
@@ -147,6 +157,7 @@ class Database:
         except pymysql.MySQLError as exc:
             raise DatabaseError(f"数据库连接失败：{exc}") from exc
         self._local.conn = conn
+        self._local.last_ping = time.time()
         return conn
 
     @contextmanager
@@ -654,6 +665,49 @@ class Database:
                     (character_id, int(limit)),
                 )
                 return cur.fetchall()
+
+    # ------------------------------------------------------------ 数据保留（清理）
+
+    def prune_balance_snapshots(self, days=7):
+        """降采样余额快照：保留最近 days 天的全部快照，更早的每天只留最后一条。
+
+        余额每 2 分钟记录一次，长期积累会膨胀（实测 3 角色 ≈ 2160 条/天）。
+        返回删除的行数。
+        """
+        cutoff = (datetime.now(BEIJING_TZ) - timedelta(days=days)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """DELETE FROM wallet_balance
+                       WHERE recorded_at < %s
+                         AND id NOT IN (
+                             SELECT keep_id FROM (
+                                 SELECT MAX(id) AS keep_id FROM wallet_balance
+                                 WHERE recorded_at < %s
+                                 GROUP BY character_id, DATE(recorded_at)
+                             ) AS keep
+                         )""",
+                    (cutoff, cutoff),
+                )
+                return cur.rowcount
+
+    def delete_old_killmails(self, days=14):
+        """删除 N 天前的全宇宙 km（表约 1.1 万条/天，长期会膨胀到百万级）。
+
+        「击毁」指令只查最近几条，历史 km 无查询价值。返回删除的行数。
+        """
+        cutoff = (datetime.now(BEIJING_TZ) - timedelta(days=days)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM universe_killmails WHERE killmail_time < %s",
+                    (cutoff,),
+                )
+                return cur.rowcount
 
     # ------------------------------------------------------------ 全宇宙 km 监控
 

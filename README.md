@@ -41,10 +41,22 @@ cp config.example.json config.json
   "host": "127.0.0.1",
   "port": 3306,
   "user": "eve_esi",
-  "password": "你的密码",
-  "database": "eve_esi"
-}
+   "password": "你的密码",
+   "database": "eve_esi"
+ }
 ```
+
+### 环境变量覆盖密钥（可选）
+
+敏感配置（client_secret、DB 密码、OneBot token 等）可通过环境变量覆盖
+`config.json` 中的值，避免密钥常驻明文文件（环境变量优先）：
+
+| 环境变量 | 覆盖字段 |
+|---|---|
+| `EVE_CLIENT_ID` / `EVE_CLIENT_SECRET` / `EVE_CALLBACK_URL` | 顶层 OAuth 配置 |
+| `EVE_DB_HOST` / `EVE_DB_PORT` / `EVE_DB_USER` / `EVE_DB_PASSWORD` / `EVE_DB_NAME` | `db.*` |
+| `EVE_PUSH_ACCESS_TOKEN` | `push.access_token` |
+| `EVE_USER_AGENT` | `user_agent` |
 
 ## 使用方法
 
@@ -93,6 +105,25 @@ tail -f auto_query.log
 # 停止定时任务
 pkill -f auto_query.py
 ```
+
+### 数据自动清理（每日一次）
+
+- **余额快照降采样**：最近 7 天完整保留，更早的历史每天只保留最后一条
+  （余额每 2 分钟记录一次，不清理一年会积累几十万行）；
+- **全宇宙 km 保留**：只保留最近 14 天（zKillboard 每天约 1.1 万条）；
+- 由 `auto_query.py` 每日自动执行（通过 `push_state.json` 的 `last_prune_date` 守卫），
+  手动触发：`python3 -c "from auto_query import prune_data; from main import get_db, load_config; prune_data(get_db(load_config()))"`。
+
+### 日志轮转
+
+三个常驻进程的日志已配置 logrotate（`/etc/logrotate.d/eve_esi`，每天轮转、保留 14 份、压缩）：
+`auto_query.log` / `kill_monitor.log` / `qq_auth_bot.log`。进程通过 nohup/supervisor 追加写入，
+故使用 `copytruncate` 策略（rename 会让已打开的 fd 继续写旧文件）。
+
+### 报告按需重生成
+
+`auto_query.py` 仅在**数据发生变化**（新增流水或余额变动）时才重绘 HTML 报告；
+数据未变时每 30 轮（约 1 小时）兜底刷新一次，避免每 2 分钟调用 matplotlib 全量重绘。
 
 ## 图表化展示余额历史
 
@@ -177,12 +208,12 @@ python eve_push.py --dry-run              # 只预览不发送
 **运行命令服务：**
 ```bash
 cd eve_esi
-nohup python3 qq_bot.py > qq_bot.log 2>&1 &   # 启动（监听 127.0.0.1:8888）
-pkill -f qq_bot.py                            # 停止
+nohup python3 qq_auth_bot.py > qq_auth_bot.log 2>&1 &   # 启动（监听 127.0.0.1:8888）
+pkill -f qq_auth_bot.py                            # 停止
 ```
 
 原理：NapCat 通过 OneBot HTTP 上报将 QQ 消息事件 POST 到 `127.0.0.1:8888/onebot/event`，
-`qq_bot.py` 解析命令并从数据库快照/ESI 查询余额，通过 OneBot API 回复。
+`qq_auth_bot.py` 解析命令并从数据库快照/ESI 查询余额，通过 OneBot API 回复。
 
 ## 全宇宙高价值 km 监控（`kill_monitor.py`）
 
@@ -402,9 +433,28 @@ EFT 正文下方会**空两行**再接一条横线与补充信息（复制进游
 ## 安全提示
 
 - OAuth token（含 refresh_token）保存在数据库，请勿泄露数据库凭据。
-- EVE 官方要求设置合理的 `User-Agent`，建议带上联系方式，避免被 ESI 限流。
+- EVE 官方要求设置合理的 `User-Agent`，建议带上联系方式，避免被 ESI 限流
+  （当前 `config.json` 中仍是占位邮箱，请替换为真实联系方式）。
 - 回调服务器绑定 `0.0.0.0`，请确保 EVE 回调端口仅按需对公网开放。
 - `config.json`（含 Client Secret、数据库密码、OneBot access_token）与 `.report_auth`
-  等敏感文件均已列入 `.gitignore`，切勿提交；本仓库代码通过 `config.json` 注入凭据。
+  等敏感文件均已列入 `.gitignore`，切勿提交；本仓库代码通过 `config.json` 注入凭据，
+  亦可用[环境变量覆盖密钥](#环境变量覆盖密钥可选)进一步减少明文。
+- **切勿用 `python3 -m http.server --directory /root` 之类把项目/主目录整体暴露到公网**，
+  那会直接泄露 `config.json`、`.ssh`、`~/.git-credentials` 等。公网报告请走 nginx
+  （本站已配置：HTTPS + Basic Auth，仅暴露 `/var/www/report/report.html` 单一文件）。
 - `report.html` 含角色余额等隐私信息，公网暴露时请加 Basic Auth 或放在反向代理之后。
+- OneBot 事件接收端点（127.0.0.1:8888）会校验 `push.access_token`：
+  要求上报请求带合法的 `X-Signature: sha1=<HMAC-SHA1(token, body)>`（OneBot v11 标准，
+  NapCat/SnowLuma 自动生成），也兼容 `Authorization: Bearer <token>`；签名不符返回 403。
+  未配置 token 时保持不校验（向后兼容）。
 - 若从旧版本升级，请检查 `git log` 确认历史中不含自己的密钥（如不慎提交需改写历史并轮换密钥）。
+
+## 测试
+
+纯逻辑单元测试（不依赖网络 / 数据库）位于 `tests/`，覆盖查询串解析、挂单价计算、
+描述翻译、物品名规范化、OAuth PKCE 与 ISK 格式化等：
+
+```bash
+pip install pytest   # 或 pip install --user pytest
+python -m pytest tests/ -q
+```
