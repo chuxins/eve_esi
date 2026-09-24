@@ -41,20 +41,27 @@ def _fmt(value):
 
 
 def make_balance_chart(history, title):
-    """根据余额快照生成 PNG 图表，返回 base64 字符串。"""
-    fig, ax = plt.subplots(figsize=(10, 4.5))
+    """根据余额快照生成 PNG 图表（深色主题，与报告页面协调），返回 base64 字符串。"""
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    fig.patch.set_alpha(0)
+    ax.set_facecolor("#0d1728")
     times = [h["recorded_at"] for h in reversed(history)]
     values = [float(h["balance"]) for h in reversed(history)]
-    ax.plot(times, values, marker="o", markersize=4, linewidth=1.6, color="#3b82f6")
-    ax.set_title(title)
-    ax.grid(True, alpha=0.3)
+    ax.plot(times, values, marker="o", markersize=3.5, linewidth=1.8,
+            color="#38bdf8", zorder=3)
+    ax.fill_between(times, values, min(values), color="#38bdf8", alpha=0.12, zorder=1)
+    ax.set_title(title, color="#e8eef8", fontsize=12, pad=12)
+    for spine in ax.spines.values():
+        spine.set_color("#223351")
+    ax.tick_params(colors="#93a7c6", labelsize=9)
+    ax.grid(True, color="#223351", alpha=0.6, linewidth=0.8)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
     fig.autofmt_xdate(rotation=30)
     ax.yaxis.set_major_formatter(
         matplotlib.ticker.FuncFormatter(lambda v, p: f"{v:,.0f}")
     )
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight")
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor="#0b1220")
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
@@ -92,37 +99,56 @@ def build_report(config, db, char_arg, limit):
         trend_title = "余额变动趋势" if has_cjk else "Balance Trend"
         if history:
             img = make_balance_chart(history, f"{c['character_name']} - {trend_title}")
-            charts_html += (
-                f'<div class="chart"><h2>{name} · {trend_title}</h2>'
-                f'<img src="data:image/png;base64,{img}" alt="balance chart"></div>'
-            )
+            charts_html += f"""
+        <section class="panel chart">
+            <h2>{name} · {trend_title}</h2>
+            <img class="chart-img" src="data:image/png;base64,{img}" alt="balance chart">
+            <div class="chart-stats">
+                <div class="stat"><div class="k">区间收入</div><div class="v pos num">{_fmt(summary['total_income'])}</div></div>
+                <div class="stat"><div class="k">区间支出</div><div class="v neg num">{_fmt(summary['total_expense'])}</div></div>
+                <div class="stat"><div class="k">净变动</div><div class="v {'pos' if summary['net'] >= 0 else 'neg'} num">{_fmt(summary['net'])}</div></div>
+            </div>
+        </section>"""
         else:
-            charts_html += (
-                f'<div class="chart"><h2>{name}</h2>'
-                '<p class="empty">暂无余额历史数据，请先运行 auto_query.py 或 main.py 采集。</p></div>'
-            )
+            charts_html += f"""
+        <section class="panel chart">
+            <h2>{name}</h2>
+            <p class="empty">暂无余额历史数据，请先运行 auto_query.py 或 main.py 采集。</p>
+        </section>"""
 
         # 角色卡片
         trend_cls = "up" if change > 0 else ("down" if change < 0 else "flat")
+        trend_icon = "▲" if change > 0 else ("▼" if change < 0 else "•")
         cards_html += f"""
         <div class="card">
-            <div class="card-name">{name}</div>
-            <div class="card-id">ID: {c['character_id']}</div>
-            <div class="card-balance">{_fmt(current)} <span class="isk">ISK</span></div>
+            <div class="card-head">
+                <div>
+                    <div class="card-name">{name}</div>
+                    <div class="card-id">ID: {c['character_id']}</div>
+                </div>
+                <div class="card-trend {trend_cls}">{trend_icon}</div>
+            </div>
+            <div class="card-balance num">{_fmt(current)}<span class="isk">ISK</span></div>
             <div class="card-change {trend_cls}">区间变动 {change:+,.0f} ISK</div>
+            <div class="card-stats">
+                <div class="stat"><div class="k">收入</div><div class="v pos num">{_fmt(summary['total_income'])}</div></div>
+                <div class="stat"><div class="k">支出</div><div class="v neg num">{_fmt(summary['total_expense'])}</div></div>
+                <div class="stat"><div class="k">净变动</div><div class="v {'pos' if summary['net'] >= 0 else 'neg'} num">{_fmt(summary['net'])}</div></div>
+                <div class="stat"><div class="k">税费</div><div class="v num">{_fmt(summary['tax_total'])}</div></div>
+            </div>
             <div class="card-meta">快照 {len(history)} 条 · 流水 {summary['count']} 条</div>
         </div>"""
 
         # 汇总行
         summary_rows += f"""
         <tr>
-            <td>{name}</td>
-            <td>{_fmt(current)}</td>
-            <td class="pos">{_fmt(summary['total_income'])}</td>
-            <td class="neg">{_fmt(summary['total_expense'])}</td>
-            <td>{_fmt(summary['tax_total'])}</td>
-            <td class="{'pos' if summary['net'] >= 0 else 'neg'}">{_fmt(summary['net'])}</td>
-            <td>{summary['count']}</td>
+            <td><span class="td-name">{name}</span></td>
+            <td class="r num">{_fmt(current)}</td>
+            <td class="r num pos">{_fmt(summary['total_income'])}</td>
+            <td class="r num neg">{_fmt(summary['total_expense'])}</td>
+            <td class="r num">{_fmt(summary['tax_total'])}</td>
+            <td class="r num {'pos' if summary['net'] >= 0 else 'neg'}">{_fmt(summary['net'])}</td>
+            <td class="r num">{summary['count']}</td>
         </tr>"""
 
         # 流水明细
@@ -134,17 +160,21 @@ def build_report(config, db, char_arg, limit):
             cls = "pos" if amount >= 0 else "neg"
             desc = html.escape(translate_description(e.get("description")))
             rows += (
-                f"<tr><td>{d}</td><td class='{cls}'>{amount:+,.2f}</td>"
-                f"<td>{_fmt(e.get('balance'))}</td><td>{desc}</td></tr>"
+                f"<tr><td>{d}</td><td class='r num {cls}'>{amount:+,.2f}</td>"
+                f"<td class='r num'>{_fmt(e.get('balance'))}</td><td>{desc}</td></tr>"
             )
         journal_html += f"""
-        <div class="journal">
-            <h2>{name} · 最近流水</h2>
+        <section class="panel journal">
+            <h2>{name} · 最近流水<span class="sub">最近 {len(journal[:30])} 条</span></h2>
+            <div class="table-wrap">
             <table>
-                <thead><tr><th>时间</th><th>变动 (ISK)</th><th>变动后余额</th><th>描述</th></tr></thead>
+                <thead><tr>
+                    <th>时间</th><th class="r">变动 (ISK)</th><th class="r">变动后余额</th><th>描述</th>
+                </tr></thead>
                 <tbody>{rows}</tbody>
             </table>
-        </div>"""
+            </div>
+        </section>"""
 
     generated_at = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
     title = "EVE 钱包余额报告"
@@ -157,55 +187,138 @@ def build_report(config, db, char_arg, limit):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{page_title}</title>
 <style>
+:root {{
+  --bg-1: #0a1120; --bg-2: #0f1b31;
+  --panel: #111c30; --panel-2: #16233c;
+  --border: #223351; --border-soft: #1a2a44;
+  --text: #e8eef8; --muted: #93a7c6; --faint: #64789a;
+  --accent: #38bdf8;
+  --green: #34d399; --red: #fb7185;
+  --radius: 16px;
+  --shadow: 0 10px 30px rgba(2, 8, 23, .45);
+}}
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{ font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-       background: #0f172a; color: #e2e8f0; padding: 24px; }}
-.header {{ max-width: 1080px; margin: 0 auto 20px; }}
-.header h1 {{ font-size: 26px; color: #f8fafc; }}
-.header .meta {{ color: #94a3b8; font-size: 13px; margin-top: 6px; }}
-.cards {{ max-width: 1080px; margin: 0 auto 24px; display: grid;
-         grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }}
-.card {{ background: #1e293b; border: 1px solid #334155; border-radius: 12px;
-        padding: 18px; }}
-.card-name {{ font-size: 16px; font-weight: 600; color: #f1f5f9; }}
-.card-id {{ color: #94a3b8; font-size: 12px; margin: 2px 0 10px; }}
-.card-balance {{ font-size: 22px; font-weight: 700; color: #38bdf8; }}
-.isk {{ font-size: 12px; color: #94a3b8; }}
-.card-change {{ font-size: 13px; margin-top: 8px; }}
-.card-change.up {{ color: #4ade80; }} .card-change.down {{ color: #f87171; }}
-.card-change.flat {{ color: #94a3b8; }}
-.card-meta {{ color: #64748b; font-size: 12px; margin-top: 4px; }}
-.chart, .journal, .summary {{ max-width: 1080px; margin: 0 auto 24px;
-    background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 18px; }}
-.chart h2, .journal h2, .summary h2 {{ font-size: 18px; margin-bottom: 14px; color: #f1f5f9; }}
-.chart img {{ width: 100%; border-radius: 8px; }}
-.empty {{ color: #94a3b8; }}
+html {{ -webkit-text-size-adjust: 100%; }}
+body {{
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(1100px 560px at 85% -10%, #16294d 0%, transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, #12203f 0%, transparent 55%),
+    linear-gradient(180deg, var(--bg-1), var(--bg-2));
+  background-attachment: fixed;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}}
+.num {{ font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }}
+.container {{ max-width: 1160px; margin: 0 auto; padding: 28px 20px 48px; }}
+/* ---------- 头部 ---------- */
+.hero {{ padding: 14px 0 24px; }}
+.hero h1 {{ font-size: 28px; font-weight: 800; letter-spacing: .5px;
+  background: linear-gradient(90deg, #eef4ff, #7dd3fc);
+  -webkit-background-clip: text; background-clip: text; color: transparent; }}
+.hero .badges {{ margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }}
+.badge {{ font-size: 12px; padding: 5px 11px; border-radius: 999px;
+  background: rgba(56, 189, 248, .1); border: 1px solid rgba(56, 189, 248, .25);
+  color: #9bd8fd; }}
+.badge.muted {{ background: rgba(147, 167, 198, .08); border-color: var(--border);
+  color: var(--muted); }}
+/* ---------- 面板 ---------- */
+.panel {{ background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 20px; }}
+.panel + .panel {{ margin-top: 20px; }}
+.panel h2 {{ font-size: 17px; font-weight: 700; margin-bottom: 14px; }}
+.panel h2 .sub {{ font-size: 12px; color: var(--muted); font-weight: 500; margin-left: 8px; }}
+/* ---------- 角色卡片 ---------- */
+.cards {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(252px, 1fr));
+  gap: 14px; margin-bottom: 20px; }}
+.card {{ background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px; box-shadow: var(--shadow);
+  transition: transform .15s ease, border-color .15s ease; }}
+.card:hover {{ transform: translateY(-2px); border-color: #2e4673; }}
+.card-head {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }}
+.card-name {{ font-size: 15px; font-weight: 700; }}
+.card-id {{ font-size: 11px; color: var(--faint); margin-top: 2px; }}
+.card-trend {{ width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+  background: rgba(147, 167, 198, .08); border: 1px solid var(--border); }}
+.card-trend.up {{ color: var(--green); border-color: rgba(52, 211, 153, .35);
+  background: rgba(52, 211, 153, .08); }}
+.card-trend.down {{ color: var(--red); border-color: rgba(251, 113, 133, .35);
+  background: rgba(251, 113, 133, .08); }}
+.card-trend.flat {{ color: var(--muted); }}
+.card-balance {{ font-size: 25px; font-weight: 800; color: var(--accent);
+  margin: 14px 0 2px; }}
+.card-balance .isk {{ font-size: 12px; color: var(--muted); font-weight: 500; margin-left: 4px; }}
+.card-change {{ font-size: 13px; margin-bottom: 12px; }}
+.card-change.up {{ color: var(--green); }} .card-change.down {{ color: var(--red); }}
+.card-change.flat {{ color: var(--muted); }}
+.card-stats {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }}
+.stat {{ background: rgba(255, 255, 255, .03); border: 1px solid var(--border-soft);
+  border-radius: 10px; padding: 8px 10px; }}
+.stat .k {{ font-size: 11px; color: var(--muted); }}
+.stat .v {{ font-size: 13px; font-weight: 600; margin-top: 2px; }}
+.stat .v.pos {{ color: var(--green); }} .stat .v.neg {{ color: var(--red); }}
+.card-meta {{ margin-top: 10px; font-size: 12px; color: var(--faint); }}
+/* ---------- 表格 ---------- */
+.table-wrap {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
 table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #334155; }}
-th {{ color: #94a3b8; font-weight: 600; }}
-td.pos {{ color: #4ade80; }} td.neg {{ color: #f87171; }}
-.journal table {{ max-height: 400px; display: block; overflow-y: auto; }}
-.journal thead {{ position: sticky; top: 0; background: #1e293b; }}
+thead th {{ text-align: left; padding: 10px 12px; color: var(--muted); font-weight: 600;
+  border-bottom: 1px solid var(--border); background: rgba(255, 255, 255, .025);
+  position: sticky; top: 0; }}
+tbody td {{ padding: 9px 12px; border-bottom: 1px solid var(--border-soft);
+  vertical-align: top; }}
+tbody tr:hover {{ background: rgba(56, 189, 248, .05); }}
+.td-name {{ font-weight: 600; }}
+td.r, th.r {{ text-align: right; }}
+td.pos {{ color: var(--green); }} td.neg {{ color: var(--red); }}
+/* ---------- 图表 ---------- */
+.chart-img {{ width: 100%; height: auto; border-radius: 10px;
+  border: 1px solid var(--border-soft); }}
+.chart-stats {{ margin-top: 14px; display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }}
+/* ---------- 其它 ---------- */
+.empty {{ color: var(--muted); padding: 18px 0; text-align: center;
+  border: 1px dashed var(--border); border-radius: 10px; }}
+footer {{ margin-top: 28px; text-align: center; color: var(--faint); font-size: 12px; }}
+@media (max-width: 640px) {{
+  .container {{ padding: 16px 12px 32px; }}
+  .hero h1 {{ font-size: 22px; }}
+  .card-balance {{ font-size: 21px; }}
+  .panel {{ padding: 16px; }}
+}}
 </style>
 </head>
 <body>
-<div class="header">
-    <h1>{title}</h1>
-    <div class="meta">生成时间：{generated_at} · 数据来源：EVE ESI / MySQL</div>
-</div>
-<div class="cards">{cards_html}</div>
-<div class="summary">
-    <h2>收支汇总</h2>
-    <table>
+<div class="container">
+  <header class="hero">
+    <h1>🪙 {title}</h1>
+    <div class="badges">
+      <span class="badge">生成时间 {generated_at}</span>
+      <span class="badge muted">角色 {len(chars)} 个</span>
+      <span class="badge muted">数据来源 EVE ESI / MySQL</span>
+    </div>
+  </header>
+  <section class="cards">{cards_html}</section>
+  <section class="panel summary">
+    <h2>收支汇总<span class="sub">基于最近流水统计</span></h2>
+    <div class="table-wrap">
+      <table>
         <thead><tr>
-            <th>角色</th><th>当前余额</th><th>总收入</th><th>总支出</th>
-            <th>税费</th><th>净变动</th><th>流水条数</th>
+          <th>角色</th><th class="r">当前余额</th><th class="r">总收入</th>
+          <th class="r">总支出</th><th class="r">税费</th><th class="r">净变动</th><th class="r">流水条数</th>
         </tr></thead>
         <tbody>{summary_rows}</tbody>
-    </table>
+      </table>
+    </div>
+  </section>
+  {charts_html}
+  {journal_html}
+  <footer>EVE 钱包报告 · 由 auto_query.py 自动生成 · 数据来源 EVE ESI</footer>
 </div>
-{charts_html}
-{journal_html}
 </body>
 </html>"""
 
